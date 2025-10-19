@@ -21,9 +21,7 @@ use crate::filter::SlicesIterator;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type};
 use arrow_array::*;
-use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
-};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, OffsetBufferBuilder, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType};
@@ -433,25 +431,34 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         value: &[u8],
     ) -> (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) {
         let value_length = value.len();
+
+        let number_of_true = predicate.count_set_bits();
+        let number_of_bytes = number_of_true * value_length;
+
+        // Fast path for all nulls
+        if number_of_true == 0 {
+            // All values are null
+            let nulls = NullBuffer::new_null(predicate.len());
+
+            return (
+                // Empty bytes
+                Buffer::from(&[]),
+                // All nulls so all lengths are 0
+                OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
+                Some(nulls),
+            );
+        }
+
         let offsets = OffsetBuffer::<T::Offset>::from_lengths(
             predicate.iter().map(|b| if b { value_length } else { 0 }),
         );
 
-        let length = offsets.last().map(|o| o.as_usize()).unwrap_or(0);
+        let mut bytes = Vec::<u8>::with_capacity(number_of_bytes);
+        for _ in 0..number_of_true {
+            bytes.extend_from_slice(value);
+        }
 
-        let bytes_iter = predicate
-            .iter()
-            .flat_map(|b| if b { value } else { &[] })
-            .copied();
-
-        let bytes = unsafe {
-            // Safety: the iterator is trusted length as we limit it to the known length
-            MutableBuffer::from_trusted_len_iter(
-                bytes_iter
-                    // Limiting the bytes so the iterator will be trusted length
-                    .take(length),
-            )
-        };
+        let bytes = Buffer::from(bytes);
 
         // If a value is true we need the TRUTHY and the null buffer will have 1 (meaning not null)
         // If a value is false we need the FALSY and the null buffer will have 0 (meaning null)
@@ -515,7 +522,7 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
                         // Empty bytes
                         Buffer::from(&[]),
                         // All nulls so all lengths are 0
-                        OffsetBuffer::<T::Offset>::from_lengths(std::iter::repeat_n(0, result_len)),
+                        OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
                         Some(nulls),
                     )
                 }
