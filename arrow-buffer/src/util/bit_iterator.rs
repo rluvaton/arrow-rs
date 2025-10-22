@@ -76,7 +76,7 @@ impl Iterator for BitIterator<'_> {
     where
       Self: Sized,
     {
-        self.end_offset - self.current_offset
+        self.len()
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
