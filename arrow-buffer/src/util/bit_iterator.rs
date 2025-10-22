@@ -71,6 +71,60 @@ impl Iterator for BitIterator<'_> {
         let remaining_bits = self.end_offset - self.current_offset;
         (remaining_bits, Some(remaining_bits))
     }
+
+    fn count(self) -> usize
+    where
+      Self: Sized,
+    {
+        self.end_offset - self.current_offset
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we advance to the one before the desired offset
+        match self.current_offset.checked_add(n.saturating_sub(1)) {
+            // Yes, and still within bounds
+            Some(new_offset) if new_offset < self.end_offset => {
+                self.current_offset = new_offset;
+            }
+
+            // Either overflow or would exceed end_offset
+            _ => {
+                self.current_offset = self.end_offset;
+                return None;
+            }
+        }
+
+        self.next()
+    }
+
+    fn last(mut self) -> Option<Self::Item> {
+        // If already at the end, return None
+        if self.current_offset == self.end_offset {
+            return None;
+        }
+
+        // Go to the one before the last bit
+        self.current_offset = self.end_offset - 1;
+
+        // Return the last bit
+        self.next()
+    }
+
+    fn max(self) -> Option<Self::Item>
+    where
+      Self: Sized,
+      Self::Item: Ord,
+    {
+        if self.current_offset == self.end_offset {
+            return None;
+        }
+
+        // true is greater than false so we only need to check if there's any true bit
+        let mut bit_index_iter = BitIndexIterator::new(self.buffer, self.current_offset, self.end_offset - self.current_offset);
+
+        // If there's at least one set bit, return true
+        bit_index_iter.next().map(|_| true)
+    }
 }
 
 impl ExactSizeIterator for BitIterator<'_> {}
@@ -85,6 +139,24 @@ impl DoubleEndedIterator for BitIterator<'_> {
         // offsets in bounds
         let v = unsafe { get_bit_raw(self.buffer.as_ptr(), self.end_offset) };
         Some(v)
+    }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we advance to the one before the desired offset
+        match self.end_offset.checked_sub(n.saturating_sub(1)) {
+            // Yes, and still within bounds
+            Some(new_offset) if self.current_offset < new_offset => {
+                self.end_offset = new_offset;
+            }
+
+            // Either underflow or would exceed current_offset
+            _ => {
+                self.current_offset = self.end_offset;
+                return None;
+            }
+        }
+
+        self.next_back()
     }
 }
 
