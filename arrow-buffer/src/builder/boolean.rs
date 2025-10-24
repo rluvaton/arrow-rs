@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util, mutable_buffer_bin_and,
-    mutable_buffer_bin_or, mutable_buffer_bin_xor, mutable_buffer_unary_not,
-};
+use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Range};
 
 /// Builder for [`BooleanBuffer`]
@@ -275,11 +272,9 @@ impl Not for BooleanBufferBuilder {
     type Output = BooleanBufferBuilder;
 
     fn not(mut self) -> Self::Output {
-        mutable_buffer_unary_not(&mut self.buffer, 0, self.len);
-        Self {
-            buffer: self.buffer,
-            len: self.len,
-        }
+        self.buffer
+            .mutable_bitwise_unary_op_helper(0, self.len, |b| !b);
+        self
     }
 }
 
@@ -307,15 +302,21 @@ impl BitAndAssign<&BooleanBuffer> for BooleanBufferBuilder {
     fn bitand_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
 
-        mutable_buffer_bin_and(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
+        self.buffer.mutable_bitwise_bin_op_helper(
+            0,
+            rhs.inner(),
+            rhs.offset(),
+            self.len,
+            |a, b| a & b,
+        );
     }
 }
 
 impl BitAndAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
     fn bitand_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
-
-        mutable_buffer_bin_and(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+        self.buffer
+            .mutable_bitwise_bin_op_helper(0, &rhs.buffer, 0, self.len, |a, b| a & b);
     }
 }
 
@@ -342,8 +343,13 @@ impl BitOr<&BooleanBufferBuilder> for BooleanBufferBuilder {
 impl BitOrAssign<&BooleanBuffer> for BooleanBufferBuilder {
     fn bitor_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
-
-        mutable_buffer_bin_or(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
+        self.buffer.mutable_bitwise_bin_op_helper(
+            0,
+            rhs.inner(),
+            rhs.offset(),
+            self.len,
+            |a, b| a | b,
+        );
     }
 }
 
@@ -351,7 +357,8 @@ impl BitOrAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
     fn bitor_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
 
-        mutable_buffer_bin_or(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+        self.buffer
+            .mutable_bitwise_bin_op_helper(0, &rhs.buffer, 0, self.len, |a, b| a | b);
     }
 }
 
@@ -378,16 +385,21 @@ impl BitXor<&BooleanBufferBuilder> for BooleanBufferBuilder {
 impl BitXorAssign<&BooleanBuffer> for BooleanBufferBuilder {
     fn bitxor_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
-
-        mutable_buffer_bin_xor(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
+        self.buffer.mutable_bitwise_bin_op_helper(
+            0,
+            rhs.inner(),
+            rhs.offset(),
+            self.len,
+            |a, b| a ^ b,
+        );
     }
 }
 
 impl BitXorAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
     fn bitxor_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
-
-        mutable_buffer_bin_xor(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+        self.buffer
+            .mutable_bitwise_bin_op_helper(0, &rhs.buffer, 0, self.len, |a, b| a ^ b);
     }
 }
 

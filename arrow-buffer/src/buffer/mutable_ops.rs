@@ -19,124 +19,122 @@ use super::MutableBuffer;
 use crate::bit_chunk_iterator::BitChunks;
 use crate::util::bit_util;
 
-/// Apply a binary bitwise operation to two bit-packed buffers.
-///
-/// This is the main entry point for binary operations. It handles both byte-aligned
-/// and non-byte-aligned cases by delegating to specialized helper functions.
-///
-/// # Arguments
-///
-/// * `left` - The left mutable buffer to be modified in-place
-/// * `left_offset_in_bits` - Starting bit offset in the left buffer
-/// * `right` - The right buffer (as byte slice)
-/// * `right_offset_in_bits` - Starting bit offset in the right buffer
-/// * `len_in_bits` - Number of bits to process
-/// * `op` - Binary operation to apply (e.g., `|a, b| a & b`)
-///
-#[allow(
-    private_bounds,
-    reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
-)]
-pub fn mutable_bitwise_bin_op_helper<F>(
-    left: &mut MutableBuffer,
-    left_offset_in_bits: usize,
-    right: impl AsRef<[u8]>,
-    right_offset_in_bits: usize,
-    len_in_bits: usize,
-    mut op: F,
-) where
-    F: FnMut(u64, u64) -> u64,
-{
-    if len_in_bits == 0 {
-        return;
-    }
-
-    let mutable_buffer = left;
-
-    let mutable_buffer_len = mutable_buffer.len();
-    let mutable_buffer_cap = mutable_buffer.capacity();
-
-    // offset inside a byte
-    let left_bit_offset = left_offset_in_bits % 8;
-
-    let is_mutable_buffer_byte_aligned = left_bit_offset == 0;
-
-    if is_mutable_buffer_byte_aligned {
-        mutable_buffer_byte_aligned_bitwise_bin_op_helper(
-            mutable_buffer,
-            left_offset_in_bits,
-            right,
-            right_offset_in_bits,
-            len_in_bits,
-            op,
-        );
-    } else {
-        // If we are not byte aligned, run `op` on the first few bits to reach byte alignment
-        let bits_to_next_byte = 8 - left_bit_offset;
-
-        {
-            let right_byte_offset = right_offset_in_bits / 8;
-
-            // Read the same amount of bits from the right buffer
-            let right_first_byte: u8 = read_up_to_byte_from_offset(
-                &right.as_ref()[right_byte_offset..],
-                bits_to_next_byte,
-                // Right bit offset
-                right_offset_in_bits % 8,
-            );
-
-            align_to_byte(
-                // Hope it gets inlined
-                &mut |left| op(left, right_first_byte as u64),
-                mutable_buffer,
-                left_offset_in_bits,
-            );
-        }
-
-        let left_offset_in_bits = left_offset_in_bits + bits_to_next_byte;
-        let right_offset_in_bits = right_offset_in_bits + bits_to_next_byte;
-        let len_in_bits = len_in_bits.saturating_sub(bits_to_next_byte);
-
+impl MutableBuffer {
+    /// Apply a binary bitwise operation to two bit-packed buffers.
+    ///
+    /// This is the main entry point for binary operations. It handles both byte-aligned
+    /// and non-byte-aligned cases by delegating to specialized helper functions.
+    ///
+    /// # Arguments
+    ///
+    /// * `left` - The left mutable buffer to be modified in-place
+    /// * `left_offset_in_bits` - Starting bit offset in the left buffer
+    /// * `right` - The right buffer (as byte slice)
+    /// * `right_offset_in_bits` - Starting bit offset in the right buffer
+    /// * `len_in_bits` - Number of bits to process
+    /// * `op` - Binary operation to apply (e.g., `|a, b| a & b`)
+    ///
+    pub fn mutable_bitwise_bin_op_helper<F>(
+        &mut self,
+        left_offset_in_bits: usize,
+        right: impl AsRef<[u8]>,
+        right_offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) where
+        F: FnMut(u64, u64) -> u64,
+    {
         if len_in_bits == 0 {
-            // Making sure that our guarantee that the length and capacity of the mutable buffer
-            // will not change is upheld
-            assert_eq!(
-                mutable_buffer.len(),
-                mutable_buffer_len,
-                "The length of the mutable buffer must not change"
-            );
-            assert_eq!(
-                mutable_buffer.capacity(),
-                mutable_buffer_cap,
-                "The capacity of the mutable buffer must not change"
-            );
-
             return;
         }
 
-        // We are now byte aligned
-        mutable_buffer_byte_aligned_bitwise_bin_op_helper(
-            mutable_buffer,
-            left_offset_in_bits,
-            right,
-            right_offset_in_bits,
-            len_in_bits,
-            op,
+        let mutable_buffer = self;
+
+        let mutable_buffer_len = mutable_buffer.len();
+        let mutable_buffer_cap = mutable_buffer.capacity();
+
+        // offset inside a byte
+        let left_bit_offset = left_offset_in_bits % 8;
+
+        let is_mutable_buffer_byte_aligned = left_bit_offset == 0;
+
+        if is_mutable_buffer_byte_aligned {
+            mutable_buffer_byte_aligned_bitwise_bin_op_helper(
+                mutable_buffer,
+                left_offset_in_bits,
+                right,
+                right_offset_in_bits,
+                len_in_bits,
+                op,
+            );
+        } else {
+            // If we are not byte aligned, run `op` on the first few bits to reach byte alignment
+            let bits_to_next_byte = 8 - left_bit_offset;
+
+            {
+                let right_byte_offset = right_offset_in_bits / 8;
+
+                // Read the same amount of bits from the right buffer
+                let right_first_byte: u8 = read_up_to_byte_from_offset(
+                    &right.as_ref()[right_byte_offset..],
+                    bits_to_next_byte,
+                    // Right bit offset
+                    right_offset_in_bits % 8,
+                );
+
+                align_to_byte(
+                    // Hope it gets inlined
+                    &mut |left| op(left, right_first_byte as u64),
+                    mutable_buffer,
+                    left_offset_in_bits,
+                );
+            }
+
+            let left_offset_in_bits = left_offset_in_bits + bits_to_next_byte;
+            let right_offset_in_bits = right_offset_in_bits + bits_to_next_byte;
+            let len_in_bits = len_in_bits.saturating_sub(bits_to_next_byte);
+
+            if len_in_bits == 0 {
+                // Making sure that our guarantee that the length and capacity of the mutable buffer
+                // will not change is upheld
+                assert_eq!(
+                    mutable_buffer.len(),
+                    mutable_buffer_len,
+                    "The length of the mutable buffer must not change"
+                );
+                assert_eq!(
+                    mutable_buffer.capacity(),
+                    mutable_buffer_cap,
+                    "The capacity of the mutable buffer must not change"
+                );
+
+                return;
+            }
+
+            // We are now byte aligned
+            mutable_buffer_byte_aligned_bitwise_bin_op_helper(
+                mutable_buffer,
+                left_offset_in_bits,
+                right,
+                right_offset_in_bits,
+                len_in_bits,
+                op,
+            );
+        }
+
+        // Making sure that our guarantee that the length and capacity of the mutable buffer
+        // will not change is upheld
+        assert_eq!(
+            mutable_buffer.len(),
+            mutable_buffer_len,
+            "The length of the mutable buffer must not change"
+        );
+        assert_eq!(
+            mutable_buffer.capacity(),
+            mutable_buffer_cap,
+            "The capacity of the mutable buffer must not change"
         );
     }
-
-    // Making sure that our guarantee that the length and capacity of the mutable buffer
-    // will not change is upheld
-    assert_eq!(
-        mutable_buffer.len(),
-        mutable_buffer_len,
-        "The length of the mutable buffer must not change"
-    );
-    assert_eq!(
-        mutable_buffer.capacity(),
-        mutable_buffer_cap,
-        "The capacity of the mutable buffer must not change"
-    );
 }
 
 /// Align to byte boundary by applying operation to bits before the next byte boundary.
@@ -647,225 +645,98 @@ fn handle_mutable_buffer_remainder_unary<F>(
     set_remainder_bits(start_remainder_mut, rem, remainder_len);
 }
 
-/// Apply a bitwise operation to a mutable buffer and update it in-place.
-///
-/// This is the main entry point for unary operations. It handles both byte-aligned
-/// and non-byte-aligned cases.
-///
-/// The input is treated as a bitmap, meaning that offset and length are specified
-/// in number of bits.
-///
-/// # Arguments
-///
-/// * `buffer` - The mutable buffer to modify
-/// * `offset_in_bits` - Starting bit offset
-/// * `len_in_bits` - Number of bits to process
-/// * `op` - Unary operation to apply (e.g., `|a| !a`)
-#[allow(
-    private_bounds,
-    reason = "MutableOpsBufferSupportedLhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
-)]
-pub fn mutable_bitwise_unary_op_helper<F>(
-    buffer: &mut MutableBuffer,
-    offset_in_bits: usize,
-    len_in_bits: usize,
-    mut op: F,
-) where
-    F: FnMut(u64) -> u64,
-{
-    if len_in_bits == 0 {
-        return;
-    }
-
-    let mutable_buffer = buffer;
-
-    let mutable_buffer_len = mutable_buffer.len();
-    let mutable_buffer_cap = mutable_buffer.capacity();
-
-    // offset inside a byte
-    let left_bit_offset = offset_in_bits % 8;
-
-    let is_mutable_buffer_byte_aligned = left_bit_offset == 0;
-
-    if is_mutable_buffer_byte_aligned {
-        mutable_byte_aligned_bitwise_unary_op_helper(
-            mutable_buffer,
-            offset_in_bits,
-            len_in_bits,
-            op,
-        );
-    } else {
-        // If we are not byte aligned we will read the first few bits
-        let bits_to_next_byte = 8 - left_bit_offset;
-
-        align_to_byte(&mut op, mutable_buffer, offset_in_bits);
-
-        let offset_in_bits = offset_in_bits + bits_to_next_byte;
-        let len_in_bits = len_in_bits.saturating_sub(bits_to_next_byte);
-
+impl MutableBuffer {
+    /// Apply a bitwise operation to a mutable buffer and update it in-place.
+    ///
+    /// This is the main entry point for unary operations. It handles both byte-aligned
+    /// and non-byte-aligned cases.
+    ///
+    /// The input is treated as a bitmap, meaning that offset and length are specified
+    /// in number of bits.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The mutable buffer to modify
+    /// * `offset_in_bits` - Starting bit offset
+    /// * `len_in_bits` - Number of bits to process
+    /// * `op` - Unary operation to apply (e.g., `|a| !a`)
+    pub fn mutable_bitwise_unary_op_helper<F>(
+        &mut self,
+        offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) where
+        F: FnMut(u64) -> u64,
+    {
         if len_in_bits == 0 {
-            // Making sure that our guarantee that the length and capacity of the mutable buffer
-            // will not change is upheld
-            assert_eq!(
-                mutable_buffer.len(),
-                mutable_buffer_len,
-                "The length of the mutable buffer must not change"
-            );
-            assert_eq!(
-                mutable_buffer.capacity(),
-                mutable_buffer_cap,
-                "The capacity of the mutable buffer must not change"
-            );
-
             return;
         }
 
-        // We are now byte aligned
-        mutable_byte_aligned_bitwise_unary_op_helper(
-            mutable_buffer,
-            offset_in_bits,
-            len_in_bits,
-            op,
+        let mutable_buffer = self;
+
+        let mutable_buffer_len = mutable_buffer.len();
+        let mutable_buffer_cap = mutable_buffer.capacity();
+
+        // offset inside a byte
+        let left_bit_offset = offset_in_bits % 8;
+
+        let is_mutable_buffer_byte_aligned = left_bit_offset == 0;
+
+        if is_mutable_buffer_byte_aligned {
+            mutable_byte_aligned_bitwise_unary_op_helper(
+                mutable_buffer,
+                offset_in_bits,
+                len_in_bits,
+                op,
+            );
+        } else {
+            // If we are not byte aligned we will read the first few bits
+            let bits_to_next_byte = 8 - left_bit_offset;
+
+            align_to_byte(&mut op, mutable_buffer, offset_in_bits);
+
+            let offset_in_bits = offset_in_bits + bits_to_next_byte;
+            let len_in_bits = len_in_bits.saturating_sub(bits_to_next_byte);
+
+            if len_in_bits == 0 {
+                // Making sure that our guarantee that the length and capacity of the mutable buffer
+                // will not change is upheld
+                assert_eq!(
+                    mutable_buffer.len(),
+                    mutable_buffer_len,
+                    "The length of the mutable buffer must not change"
+                );
+                assert_eq!(
+                    mutable_buffer.capacity(),
+                    mutable_buffer_cap,
+                    "The capacity of the mutable buffer must not change"
+                );
+
+                return;
+            }
+
+            // We are now byte aligned
+            mutable_byte_aligned_bitwise_unary_op_helper(
+                mutable_buffer,
+                offset_in_bits,
+                len_in_bits,
+                op,
+            );
+        }
+
+        // Making sure that our guarantee that the length and capacity of the mutable buffer
+        // will not change is upheld
+        assert_eq!(
+            mutable_buffer.len(),
+            mutable_buffer_len,
+            "The length of the mutable buffer must not change"
+        );
+        assert_eq!(
+            mutable_buffer.capacity(),
+            mutable_buffer_cap,
+            "The capacity of the mutable buffer must not change"
         );
     }
-
-    // Making sure that our guarantee that the length and capacity of the mutable buffer
-    // will not change is upheld
-    assert_eq!(
-        mutable_buffer.len(),
-        mutable_buffer_len,
-        "The length of the mutable buffer must not change"
-    );
-    assert_eq!(
-        mutable_buffer.capacity(),
-        mutable_buffer_cap,
-        "The capacity of the mutable buffer must not change"
-    );
-}
-
-/// Apply a bitwise AND operation to two buffers.
-///
-/// The left buffer (mutable) is modified in-place to contain the result.
-/// The inputs are treated as bitmaps, meaning that offsets and length are
-/// specified in number of bits.
-///
-/// # Arguments
-///
-/// * `left` - The left mutable buffer (will be modified)
-/// * `left_offset_in_bits` - Starting bit offset in the left buffer
-/// * `right` - The right buffer
-/// * `right_offset_in_bits` - Starting bit offset in the right buffer
-/// * `len_in_bits` - Number of bits to process
-#[allow(
-    private_bounds,
-    reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
-)]
-pub fn mutable_buffer_bin_and(
-    left: &mut MutableBuffer,
-    left_offset_in_bits: usize,
-    right: impl AsRef<[u8]>,
-    right_offset_in_bits: usize,
-    len_in_bits: usize,
-) {
-    mutable_bitwise_bin_op_helper(
-        left,
-        left_offset_in_bits,
-        right,
-        right_offset_in_bits,
-        len_in_bits,
-        |a, b| a & b,
-    )
-}
-
-/// Apply a bitwise OR operation to two buffers.
-///
-/// The left buffer (mutable) is modified in-place to contain the result.
-/// The inputs are treated as bitmaps, meaning that offsets and length are
-/// specified in number of bits.
-///
-/// # Arguments
-///
-/// * `left` - The left mutable buffer (will be modified)
-/// * `left_offset_in_bits` - Starting bit offset in the left buffer
-/// * `right` - The right buffer
-/// * `right_offset_in_bits` - Starting bit offset in the right buffer
-/// * `len_in_bits` - Number of bits to process
-#[allow(
-    private_bounds,
-    reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
-)]
-pub fn mutable_buffer_bin_or(
-    left: &mut MutableBuffer,
-    left_offset_in_bits: usize,
-    right: impl AsRef<[u8]>,
-    right_offset_in_bits: usize,
-    len_in_bits: usize,
-) {
-    mutable_bitwise_bin_op_helper(
-        left,
-        left_offset_in_bits,
-        right,
-        right_offset_in_bits,
-        len_in_bits,
-        |a, b| a | b,
-    )
-}
-
-/// Apply a bitwise XOR operation to two buffers.
-///
-/// The left buffer (mutable) is modified in-place to contain the result.
-/// The inputs are treated as bitmaps, meaning that offsets and length are
-/// specified in number of bits.
-///
-/// # Arguments
-///
-/// * `left` - The left mutable buffer (will be modified)
-/// * `left_offset_in_bits` - Starting bit offset in the left buffer
-/// * `right` - The right buffer
-/// * `right_offset_in_bits` - Starting bit offset in the right buffer
-/// * `len_in_bits` - Number of bits to process
-#[allow(
-    private_bounds,
-    reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
-)]
-pub fn mutable_buffer_bin_xor(
-    left: &mut MutableBuffer,
-    left_offset_in_bits: usize,
-    right: impl AsRef<[u8]>,
-    right_offset_in_bits: usize,
-    len_in_bits: usize,
-) {
-    mutable_bitwise_bin_op_helper(
-        left,
-        left_offset_in_bits,
-        right,
-        right_offset_in_bits,
-        len_in_bits,
-        |a, b| a ^ b,
-    )
-}
-
-/// Apply a bitwise NOT operation to the passed buffer.
-///
-/// The buffer (mutable) is modified in-place to contain the result.
-/// The input is treated as bitmap, meaning that offsets and length are
-/// specified in number of bits.
-///
-/// # Arguments
-///
-/// * `buffer` - The mutable buffer (will be modified)
-/// * `offset_in_bits` - Starting bit offset in the buffer
-/// * `len_in_bits` - Number of bits to process
-#[allow(
-    private_bounds,
-    reason = "MutableOpsBufferSupportedLhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
-)]
-pub fn mutable_buffer_unary_not(
-    buffer: &mut MutableBuffer,
-    offset_in_bits: usize,
-    len_in_bits: usize,
-) {
-    mutable_bitwise_unary_op_helper(buffer, offset_in_bits, len_in_bits, |a| !a)
 }
 
 #[cfg(test)]
@@ -896,9 +767,9 @@ mod tests {
             .map(|(l, r)| expected_op(*l, *r))
             .collect();
 
+        // todo move these tests
         unsafe {
-            super::mutable_bitwise_bin_op_helper(
-                left_buffer.mutable_buffer(),
+            left_buffer.mutable_buffer().mutable_bitwise_bin_op_helper(
                 left_offset_in_bits,
                 right_buffer.inner(),
                 right_offset_in_bits,
@@ -936,9 +807,9 @@ mod tests {
             .map(|b| expected_op(*b))
             .collect();
 
+        // TODO move these tests
         unsafe {
-            super::mutable_bitwise_unary_op_helper(
-                buffer.mutable_buffer(),
+            buffer.mutable_buffer().mutable_bitwise_unary_op_helper(
                 offset_in_bits,
                 len_in_bits,
                 op,
