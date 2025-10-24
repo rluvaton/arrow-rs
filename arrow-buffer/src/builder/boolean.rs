@@ -16,9 +16,8 @@
 // under the License.
 
 use crate::{
-    BooleanBuffer, Buffer, MutableBuffer, MutableOpsBufferSupportedLhs, bit_mask, bit_util,
-    mutable_buffer_bin_and, mutable_buffer_bin_or, mutable_buffer_bin_xor,
-    mutable_buffer_unary_not,
+    BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util, mutable_buffer_bin_and,
+    mutable_buffer_bin_or, mutable_buffer_bin_xor, mutable_buffer_unary_not,
 };
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Range};
 
@@ -260,11 +259,14 @@ impl BooleanBufferBuilder {
     pub fn finish_cloned(&self) -> BooleanBuffer {
         BooleanBuffer::new(Buffer::from_slice_ref(self.as_slice()), 0, self.len)
     }
-}
 
-/// This trait is not public API so it does not leak the inner mutable buffer
-impl MutableOpsBufferSupportedLhs for BooleanBufferBuilder {
-    fn inner_mutable_buffer(&mut self) -> &mut MutableBuffer {
+    /// Return a mutable reference to the internal buffer
+    ///
+    /// # Safety
+    /// The caller must ensure that any modifications to the buffer maintain the invariant
+    /// `self.len < buffer.len() / 8` (that is that the buffer has enough capacity to hold `self.len` bits).
+    #[inline]
+    pub unsafe fn mutable_buffer(&mut self) -> &mut MutableBuffer {
         &mut self.buffer
     }
 }

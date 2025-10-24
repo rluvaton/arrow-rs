@@ -52,41 +52,6 @@ impl BufferSupportedRhs for BooleanBufferBuilder {
     }
 }
 
-/// Trait that will be operated on as the left-hand side (LHS) buffer in mutable operations.
-///
-/// This consumer of the trait must satisfies the following guarantees:
-/// 1. It will not change the length of the buffer.
-///
-/// # Implementation notes
-///
-/// ## Why is this trait `pub(crate)`?
-/// Because we don't wanna expose the inner mutable buffer to the public.
-/// as this is the choice of the implementor of the trait and sometimes it is not desirable
-/// (e.g. `BooleanBufferBuilder`).
-///
-/// ## Why this trait is needed, can't we just use `MutableBuffer` directly?
-/// Sometimes we don't want to expose the inner `MutableBuffer`
-/// so it can't be misused.
-///
-/// For example, [`BooleanBufferBuilder`] does not expose the inner `MutableBuffer`
-/// as exposing it will allow the user to change the length of the buffer that will make the
-/// `BooleanBufferBuilder` invalid.
-///
-pub(crate) trait MutableOpsBufferSupportedLhs {
-    /// Get a mutable reference to the inner `MutableBuffer`.
-    ///
-    /// This is used to perform in-place operations on the buffer.
-    ///
-    /// the caller must ensure that the length of the buffer is not changed.
-    fn inner_mutable_buffer(&mut self) -> &mut MutableBuffer;
-}
-
-impl MutableOpsBufferSupportedLhs for MutableBuffer {
-    fn inner_mutable_buffer(&mut self) -> &mut MutableBuffer {
-        self
-    }
-}
-
 /// Apply a binary bitwise operation to two bit-packed buffers.
 ///
 /// This is the main entry point for binary operations. It handles both byte-aligned
@@ -106,7 +71,7 @@ impl MutableOpsBufferSupportedLhs for MutableBuffer {
     reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
 )]
 pub fn mutable_bitwise_bin_op_helper<F>(
-    left: &mut impl MutableOpsBufferSupportedLhs,
+    left: &mut MutableBuffer,
     left_offset_in_bits: usize,
     right: &impl BufferSupportedRhs,
     right_offset_in_bits: usize,
@@ -119,7 +84,7 @@ pub fn mutable_bitwise_bin_op_helper<F>(
         return;
     }
 
-    let mutable_buffer = left.inner_mutable_buffer();
+    let mutable_buffer = left;
 
     let mutable_buffer_len = mutable_buffer.len();
     let mutable_buffer_cap = mutable_buffer.capacity();
@@ -734,7 +699,7 @@ fn handle_mutable_buffer_remainder_unary<F>(
     reason = "MutableOpsBufferSupportedLhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
 )]
 pub fn mutable_bitwise_unary_op_helper<F>(
-    buffer: &mut impl MutableOpsBufferSupportedLhs,
+    buffer: &mut MutableBuffer,
     offset_in_bits: usize,
     len_in_bits: usize,
     mut op: F,
@@ -745,7 +710,7 @@ pub fn mutable_bitwise_unary_op_helper<F>(
         return;
     }
 
-    let mutable_buffer = buffer.inner_mutable_buffer();
+    let mutable_buffer = buffer;
 
     let mutable_buffer_len = mutable_buffer.len();
     let mutable_buffer_cap = mutable_buffer.capacity();
@@ -829,7 +794,7 @@ pub fn mutable_bitwise_unary_op_helper<F>(
     reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
 )]
 pub fn mutable_buffer_bin_and(
-    left: &mut impl MutableOpsBufferSupportedLhs,
+    left: &mut MutableBuffer,
     left_offset_in_bits: usize,
     right: &impl BufferSupportedRhs,
     right_offset_in_bits: usize,
@@ -863,7 +828,7 @@ pub fn mutable_buffer_bin_and(
     reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
 )]
 pub fn mutable_buffer_bin_or(
-    left: &mut impl MutableOpsBufferSupportedLhs,
+    left: &mut MutableBuffer,
     left_offset_in_bits: usize,
     right: &impl BufferSupportedRhs,
     right_offset_in_bits: usize,
@@ -897,7 +862,7 @@ pub fn mutable_buffer_bin_or(
     reason = "MutableOpsBufferSupportedLhs and BufferSupportedRhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
 )]
 pub fn mutable_buffer_bin_xor(
-    left: &mut impl MutableOpsBufferSupportedLhs,
+    left: &mut MutableBuffer,
     left_offset_in_bits: usize,
     right: &impl BufferSupportedRhs,
     right_offset_in_bits: usize,
@@ -929,7 +894,7 @@ pub fn mutable_buffer_bin_xor(
     reason = "MutableOpsBufferSupportedLhs exposes the inner internals which is the implementor choice and we dont want to leak internals"
 )]
 pub fn mutable_buffer_unary_not(
-    buffer: &mut impl MutableOpsBufferSupportedLhs,
+    buffer: &mut MutableBuffer,
     offset_in_bits: usize,
     len_in_bits: usize,
 ) {
@@ -964,14 +929,16 @@ mod tests {
             .map(|(l, r)| expected_op(*l, *r))
             .collect();
 
-        super::mutable_bitwise_bin_op_helper(
-            &mut left_buffer,
-            left_offset_in_bits,
-            right_buffer.inner(),
-            right_offset_in_bits,
-            len_in_bits,
-            op,
-        );
+        unsafe {
+            super::mutable_bitwise_bin_op_helper(
+                left_buffer.mutable_buffer(),
+                left_offset_in_bits,
+                right_buffer.inner(),
+                right_offset_in_bits,
+                len_in_bits,
+                op,
+            );
+        }
 
         let result: Vec<bool> =
             BitIterator::new(left_buffer.as_slice(), left_offset_in_bits, len_in_bits).collect();
@@ -1002,7 +969,14 @@ mod tests {
             .map(|b| expected_op(*b))
             .collect();
 
-        super::mutable_bitwise_unary_op_helper(&mut buffer, offset_in_bits, len_in_bits, op);
+        unsafe {
+            super::mutable_bitwise_unary_op_helper(
+                buffer.mutable_buffer(),
+                offset_in_bits,
+                len_in_bits,
+                op,
+            );
+        }
 
         let result: Vec<bool> =
             BitIterator::new(buffer.as_slice(), offset_in_bits, len_in_bits).collect();
