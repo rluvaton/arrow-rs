@@ -460,6 +460,12 @@ impl From<&[u8]> for Buffer {
     }
 }
 
+impl AsRef<[u8]> for &Buffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
 impl<const N: usize> From<[u8; N]> for Buffer {
     fn from(p: [u8; N]) -> Self {
         Self::from_slice_ref(p)

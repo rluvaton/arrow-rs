@@ -15,42 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{Buffer, MutableBuffer};
-use crate::BooleanBufferBuilder;
+use super::MutableBuffer;
 use crate::bit_chunk_iterator::BitChunks;
 use crate::util::bit_util;
-
-/// What can be used as the right-hand side (RHS) buffer in mutable operations.
-///
-/// this is not mutated.
-///
-/// # Implementation notes
-///
-/// ## Why `pub(crate)`?
-/// This is because we don't want this trait to expose the inner buffer to the public.
-/// this is the trait implementor choice.
-///
-pub(crate) trait BufferSupportedRhs {
-    fn as_slice(&self) -> &[u8];
-}
-
-impl BufferSupportedRhs for Buffer {
-    fn as_slice(&self) -> &[u8] {
-        self.as_slice()
-    }
-}
-
-impl BufferSupportedRhs for MutableBuffer {
-    fn as_slice(&self) -> &[u8] {
-        self.as_slice()
-    }
-}
-
-impl BufferSupportedRhs for BooleanBufferBuilder {
-    fn as_slice(&self) -> &[u8] {
-        self.as_slice()
-    }
-}
 
 /// Apply a binary bitwise operation to two bit-packed buffers.
 ///
@@ -73,7 +40,7 @@ impl BufferSupportedRhs for BooleanBufferBuilder {
 pub fn mutable_bitwise_bin_op_helper<F>(
     left: &mut MutableBuffer,
     left_offset_in_bits: usize,
-    right: &impl BufferSupportedRhs,
+    right: impl AsRef<[u8]>,
     right_offset_in_bits: usize,
     len_in_bits: usize,
     mut op: F,
@@ -112,7 +79,7 @@ pub fn mutable_bitwise_bin_op_helper<F>(
 
             // Read the same amount of bits from the right buffer
             let right_first_byte: u8 = read_up_to_byte_from_offset(
-                &right.as_slice()[right_byte_offset..],
+                &right.as_ref()[right_byte_offset..],
                 bits_to_next_byte,
                 // Right bit offset
                 right_offset_in_bits % 8,
@@ -272,7 +239,7 @@ fn read_up_to_byte_from_offset(
 fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
     left: &mut MutableBuffer,
     left_offset_in_bits: usize,
-    right: &impl BufferSupportedRhs,
+    right: impl AsRef<[u8]>,
     right_offset_in_bits: usize,
     len_in_bits: usize,
     mut op: F,
@@ -290,7 +257,7 @@ fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
     let (complete_u64_chunks, remainder_bytes) =
         U64UnalignedSlice::split(left, left_offset_in_bits, len_in_bits);
 
-    let right_chunks = BitChunks::new(right.as_slice(), right_offset_in_bits, len_in_bits);
+    let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
     assert_eq!(
         bit_util::ceil(right_chunks.remainder_len(), 8),
         remainder_bytes.len()
@@ -796,7 +763,7 @@ pub fn mutable_bitwise_unary_op_helper<F>(
 pub fn mutable_buffer_bin_and(
     left: &mut MutableBuffer,
     left_offset_in_bits: usize,
-    right: &impl BufferSupportedRhs,
+    right: impl AsRef<[u8]>,
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) {
@@ -830,7 +797,7 @@ pub fn mutable_buffer_bin_and(
 pub fn mutable_buffer_bin_or(
     left: &mut MutableBuffer,
     left_offset_in_bits: usize,
-    right: &impl BufferSupportedRhs,
+    right: impl AsRef<[u8]>,
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) {
@@ -864,7 +831,7 @@ pub fn mutable_buffer_bin_or(
 pub fn mutable_buffer_bin_xor(
     left: &mut MutableBuffer,
     left_offset_in_bits: usize,
-    right: &impl BufferSupportedRhs,
+    right: impl AsRef<[u8]>,
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) {
