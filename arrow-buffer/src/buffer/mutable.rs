@@ -723,6 +723,12 @@ impl MutableBuffer {
     }
 }
 
+impl AsRef<[u8]> for &MutableBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
 impl Default for MutableBuffer {
     fn default() -> Self {
         Self::with_capacity(0)
