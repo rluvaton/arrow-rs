@@ -52,6 +52,12 @@ impl BufferSupportedRhs for BooleanBufferBuilder {
     }
 }
 
+impl BufferSupportedRhs for &[u8] {
+    fn as_slice(&self) -> &[u8] {
+        self
+    }
+}
+
 /// Trait that will be operated on as the left-hand side (LHS) buffer in mutable operations.
 ///
 /// This consumer of the trait must satisfies the following guarantees:

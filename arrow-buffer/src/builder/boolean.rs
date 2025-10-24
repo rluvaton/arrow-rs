@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    BooleanBuffer, Buffer, MutableBuffer, MutableOpsBufferSupportedLhs, bit_mask, bit_util,
-    mutable_buffer_bin_and, mutable_buffer_bin_or, mutable_buffer_bin_xor,
-    mutable_buffer_unary_not,
-};
+use crate::{BooleanBuffer, Buffer, MutableBuffer, MutableOpsBufferSupportedLhs, bit_util, mutable_buffer_bin_and, mutable_buffer_bin_or, mutable_buffer_bin_xor, mutable_buffer_unary_not, mutable_bitwise_bin_op_helper};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Range};
 
 /// Builder for [`BooleanBuffer`]
@@ -32,6 +28,7 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,
+    /// Current length in bits
     len: usize,
 }
 
@@ -223,12 +220,13 @@ impl BooleanBufferBuilder {
         let offset_write = self.len;
         let len = range.end - range.start;
         self.advance(len);
-        bit_mask::set_bits(
-            self.buffer.as_slice_mut(),
-            to_set,
+        mutable_bitwise_bin_op_helper(
+            self,
             offset_write,
-            range.start,
+            &to_set,
+            0,
             len,
+            |_a, b| b,
         );
     }
 
