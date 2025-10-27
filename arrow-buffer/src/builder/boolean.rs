@@ -224,7 +224,7 @@ impl BooleanBufferBuilder {
             self,
             offset_write,
             &to_set,
-            0,
+            range.start,
             len,
             |_a, b| b,
         );
