@@ -156,14 +156,28 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
     // Write `2_u8` to demarcate as non-empty, non-null string
     out[0] = NON_EMPTY_SENTINEL;
 
-    let len = if val.len() <= BLOCK_SIZE {
-        1 + encode_blocks_mini(&mut out[1..], val)
-    } else {
-        let (initial, rem) = val.split_at(BLOCK_SIZE);
-        let offset = encode_blocks_mini_exact(&mut out[1..], initial);
-        out[offset] = BLOCK_CONTINUATION;
-        1 + offset + encode_blocks::<BLOCK_SIZE, {BLOCK_SIZE+1}>(&mut out[1 + offset..], rem)
+    let len = match val.len() / MINI_BLOCK_SIZE {
+        0 => 1 + encode_blocks_mini::<0>(&mut out[1..], val),
+        1 => 1 + encode_blocks_mini::<1>(&mut out[1..], val),
+        2 => 1 + encode_blocks_mini::<2>(&mut out[1..], val),
+        3 => 1 + encode_blocks_mini::<3>(&mut out[1..], val),
+        4 if val.len() == BLOCK_SIZE => 1 + encode_blocks_mini::<4>(&mut out[1..], val),
+        _ => {
+            let (initial, rem) = val.split_at(BLOCK_SIZE);
+            let offset = encode_blocks_mini_exact(&mut out[1..], initial);
+            out[offset] = BLOCK_CONTINUATION;
+            1 + offset + encode_blocks::<BLOCK_SIZE, {BLOCK_SIZE+1}>(&mut out[1 + offset..], rem)
+        }
     };
+    //
+    // let len = if val.len() <= BLOCK_SIZE {
+    //     1 + encode_blocks_mini(&mut out[1..], val)
+    // } else {
+    //     let (initial, rem) = val.split_at(BLOCK_SIZE);
+    //     let offset = encode_blocks_mini_exact(&mut out[1..], initial);
+    //     out[offset] = BLOCK_CONTINUATION;
+    //     1 + offset + encode_blocks::<BLOCK_SIZE, {BLOCK_SIZE+1}>(&mut out[1 + offset..], rem)
+    // };
 
     if opts.descending {
         // Invert bits
@@ -207,7 +221,7 @@ fn encode_blocks<const SIZE: usize, const SIZE_1: usize>(out: &mut [u8], val: &[
 
 /// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
 #[inline(never)]
-fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
+fn encode_blocks_mini<const ITER_COUNT: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let block_count = ceil(val.len(), MINI_BLOCK_SIZE);
     let end_offset = block_count * (MINI_BLOCK_SIZE + 1);
     let to_write = &mut out[..end_offset];
@@ -216,8 +230,11 @@ fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
     // let chunks = val.chunks_exact(SIZE);
     // let remainder = chunks.remainder();
     // let remainder = chunks.remainder();
-    let a = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0.iter_mut();
-    for (input, output) in chunks.into_iter().zip(a) {
+    let a = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0;
+    for index in 0..ITER_COUNT {
+    // for (input, output) in chunks.into_iter().zip(a) {
+        let input = &chunks[index];
+        let output = &mut a[index];
         let input: &[u8; MINI_BLOCK_SIZE] = input.try_into().unwrap();
         let out_block: &mut [u8; MINI_BLOCK_SIZE] = (&mut output[..MINI_BLOCK_SIZE]).try_into().unwrap();
 
