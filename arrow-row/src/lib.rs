@@ -164,7 +164,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow_array::cast::*;
-use arrow_array::types::ArrowDictionaryKeyType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -173,7 +173,7 @@ use variable::{decode_binary_view, decode_string_view};
 
 use crate::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
 use crate::list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
-use crate::variable::{decode_binary, decode_string};
+use crate::variable::{decode_binary, decode_string, get_lengths_for_non_null_generic_byte_array, get_lengths_or_empty_for_null_for_generic_byte_array};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
 mod fixed;
@@ -1498,31 +1498,15 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     array => tracker.push_fixed(fixed::encoded_len(array)),
                     DataType::Null => {},
                     DataType::Boolean => tracker.push_fixed(bool::ENCODED_LEN),
-                    DataType::Binary => tracker.push_variable(
-                        as_generic_binary_array::<i32>(array)
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
-                    DataType::LargeBinary => tracker.push_variable(
-                        as_generic_binary_array::<i64>(array)
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
+                    DataType::Binary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i32>(array)),
+                    DataType::LargeBinary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i64>(array)),
                     DataType::BinaryView => tracker.push_variable(
                         array.as_binary_view()
                             .iter()
                             .map(|slice| variable::encoded_len(slice))
                     ),
-                    DataType::Utf8 => tracker.push_variable(
-                        array.as_string::<i32>()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
-                    DataType::LargeUtf8 => tracker.push_variable(
-                        array.as_string::<i64>()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
+                    DataType::Utf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i32>()),
+                    DataType::LargeUtf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i64>()),
                     DataType::Utf8View => tracker.push_variable(
                         array.as_string_view()
                             .iter()
@@ -1615,6 +1599,25 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
     }
 
     tracker
+}
+
+fn push_generic_byte_array_lengths<T: ByteArrayType>(tracker: &mut LengthTracker, array: &GenericByteArray<T>) {
+    if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+        tracker.push_variable(
+            get_lengths_or_empty_for_null_for_generic_byte_array(
+                array.offsets(),
+                nulls,
+            )
+              .map(|len| variable::encoded_len_from_bytes_len(len))
+        )
+    } else {
+        tracker.push_variable(
+            get_lengths_for_non_null_generic_byte_array(
+                array.offsets(),
+            )
+              .map(|len| variable::encoded_len_from_bytes_len(len))
+        )
+    }
 }
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses

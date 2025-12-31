@@ -20,7 +20,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
@@ -48,7 +48,28 @@ pub const NON_EMPTY_SENTINEL: u8 = 2;
 /// Returns the length of the encoded representation of a byte array, including the null byte
 #[inline]
 pub fn encoded_len(a: Option<&[u8]>) -> usize {
-    padded_length(a.map(|x| x.len()))
+    encoded_len_from_bytes_len(a.map(|x| x.len()))
+}
+
+/// Returns the length of the encoded representation of a byte array, including the null byte
+#[inline]
+pub fn encoded_len_from_bytes_len(a: Option<usize>) -> usize {
+    padded_length(a)
+}
+
+#[inline]
+pub fn get_lengths_or_empty_for_null_for_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>, null_buffer: &NullBuffer) -> impl ExactSizeIterator<Item = Option<usize>> {
+    offsets
+      .lengths()
+      .zip(null_buffer.iter())
+      .map(|(length, is_valid)| if is_valid { Some(length) } else { None })
+}
+
+#[inline]
+pub fn get_lengths_for_non_null_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> impl ExactSizeIterator<Item = Option<usize>> {
+    offsets
+      .lengths()
+      .map(Some)
 }
 
 /// Returns the padded length of the encoded length of the given length
