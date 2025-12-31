@@ -246,38 +246,47 @@ fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
         return 0;
     }
 
+    let block_count = ceil(len, MINI_BLOCK_SIZE);
+    let end_offset = block_count * (MINI_BLOCK_SIZE + 1);
+
     let src = val.as_ptr();
     let dst = out.as_mut_ptr();
 
-    // Always copy up to 32 bytes (4 blocks worth), works since len < 32
-    // Use a single 32-byte copy if available
-    let block_count = (len + 7) / 8;
-
-    // Copy all input data to a temp buffer, then scatter
+    // Copy all input to temp
     let mut tmp = [0u8; 32];
-    unsafe { std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr(), len); }
+    unsafe {
+        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr(), len);
+    }
 
-    // Write blocks unconditionally (overwrite is fine for unused ones)
-    // Block 0
-    unsafe { std::ptr::copy_nonoverlapping(tmp.as_ptr(), dst, 8); }
-    unsafe { *dst.add(8) = BLOCK_CONTINUATION; }
+    // Write to a temp output buffer first, then copy only what we need
+    let mut tmp_out = [0u8; 36];
+    let tmp_dst = tmp_out.as_mut_ptr();
 
-    // Block 1
-    unsafe { std::ptr::copy_nonoverlapping(tmp.as_ptr().add(8), dst.add(9), 8); }
-    unsafe { *dst.add(17) = BLOCK_CONTINUATION; }
+    unsafe {
+        // Block 0
+        std::ptr::copy_nonoverlapping(tmp.as_ptr(), tmp_dst, MINI_BLOCK_SIZE);
+        *tmp_dst.add(MINI_BLOCK_SIZE) = BLOCK_CONTINUATION;
 
-    // Block 2
-    unsafe { std::ptr::copy_nonoverlapping(tmp.as_ptr().add(16), dst.add(18), 8); }
-    unsafe { *dst.add(26) = BLOCK_CONTINUATION; }
+        // Block 1
+        std::ptr::copy_nonoverlapping(tmp.as_ptr().add(MINI_BLOCK_SIZE), tmp_dst.add(MINI_BLOCK_SIZE + 1), MINI_BLOCK_SIZE);
+        *tmp_dst.add(2 * MINI_BLOCK_SIZE + 1) = BLOCK_CONTINUATION;
 
-    // Block 3
-    unsafe {std::ptr::copy_nonoverlapping(tmp.as_ptr().add(24), dst.add(27), 8); }
-    unsafe {*dst.add(35) = BLOCK_CONTINUATION; }
+        // Block 2
+        std::ptr::copy_nonoverlapping(tmp.as_ptr().add(2 * MINI_BLOCK_SIZE), tmp_dst.add(2 * (MINI_BLOCK_SIZE + 1)), MINI_BLOCK_SIZE);
+        *tmp_dst.add(3 * MINI_BLOCK_SIZE + 2) = BLOCK_CONTINUATION;
 
-    // Fix up the last marker based on actual length
-    let end_offset = block_count * 9;
-    let last_block_size = if len % 8 == 0 { 8 } else { len % 8 };
-    unsafe {*dst.add(end_offset - 1) = last_block_size as u8; }
+        // Block 3
+        std::ptr::copy_nonoverlapping(tmp.as_ptr().add(3 * MINI_BLOCK_SIZE), tmp_dst.add(3 * (MINI_BLOCK_SIZE + 1)), MINI_BLOCK_SIZE);
+        *tmp_dst.add(4 * MINI_BLOCK_SIZE + 3) = BLOCK_CONTINUATION;
+
+        // Fix up the last marker
+        let remainder = len % MINI_BLOCK_SIZE;
+        let last_block_size = if remainder == 0 { MINI_BLOCK_SIZE } else { remainder };
+        *tmp_dst.add(end_offset - 1) = last_block_size as u8;
+
+        // Copy only what we need to actual output
+        std::ptr::copy_nonoverlapping(tmp_dst, dst, end_offset);
+    }
 
     end_offset
 }
