@@ -179,12 +179,16 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
 
     let len = if val.len() <= BLOCK_SIZE {
         1 + {
-            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            #[cfg(target_arch = "x86_64")]
             {
-                // SAFETY: we checked for AVX2 support via target_feature
-                unsafe { encode_blocks_mini_avx2(&mut out[1..], val) }
+                if is_x86_feature_detected!("avx2") {
+                    // SAFETY: we checked for AVX2 support via target_feature
+                    unsafe { encode_blocks_mini_avx2(&mut out[1..], val) }
+                } else {
+                    encode_blocks_mini(&mut out[1..], val)
+                }
             }
-            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+            #[cfg(not(target_arch = "x86_64"))]
             encode_blocks_mini(&mut out[1..], val)
         }
     } else {
