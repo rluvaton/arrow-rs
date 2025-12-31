@@ -173,7 +173,7 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
 }
 
 /// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
-#[inline]
+#[inline(never)]
 fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let block_count = ceil(val.len(), SIZE);
     let end_offset = block_count * (SIZE + 1);
