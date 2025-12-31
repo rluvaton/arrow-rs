@@ -191,14 +191,14 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
         output[SIZE] = BLOCK_CONTINUATION;
     }
 
-    if !remainder.is_empty() {
+    // if !remainder.is_empty() {
         let start_offset = (block_count - 1) * (SIZE + 1);
         to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
-        *to_write.last_mut().unwrap() = remainder.len() as u8;
-    } else {
-        // We must overwrite the continuation marker written by the loop above
-        *to_write.last_mut().unwrap() = SIZE as u8;
-    }
+        *to_write.last_mut().unwrap() = remainder.len().max(SIZE) as u8;
+    // } else {
+    //     // We must overwrite the continuation marker written by the loop above
+    //     *to_write.last_mut().unwrap() = SIZE as u8;
+    // }
     end_offset
 }
 
