@@ -146,25 +146,30 @@ pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usiz
         None => encode_null(out, opts),
         Some([]) => encode_empty(out, opts),
         Some(val) => {
-            // Write `2_u8` to demarcate as non-empty, non-null string
-            out[0] = NON_EMPTY_SENTINEL;
-
-            let len = if val.len() <= BLOCK_SIZE {
-                1 + encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], val)
-            } else {
-                let (initial, rem) = val.split_at(BLOCK_SIZE);
-                let offset = encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], initial);
-                out[offset] = BLOCK_CONTINUATION;
-                1 + offset + encode_blocks::<BLOCK_SIZE>(&mut out[1 + offset..], rem)
-            };
-
-            if opts.descending {
-                // Invert bits
-                out[..len].iter_mut().for_each(|v| *v = !*v)
-            }
-            len
+            encode_one_data(out, val, opts)
         }
     }
+}
+
+#[inline(never)]
+fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
+    // Write `2_u8` to demarcate as non-empty, non-null string
+    out[0] = NON_EMPTY_SENTINEL;
+
+    let len = if val.len() <= BLOCK_SIZE {
+        1 + encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], val)
+    } else {
+        let (initial, rem) = val.split_at(BLOCK_SIZE);
+        let offset = encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], initial);
+        out[offset] = BLOCK_CONTINUATION;
+        1 + offset + encode_blocks::<BLOCK_SIZE>(&mut out[1 + offset..], rem)
+    };
+
+    if opts.descending {
+        // Invert bits
+        out[..len].iter_mut().for_each(|v| *v = !*v)
+    }
+    len
 }
 
 /// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
