@@ -190,8 +190,8 @@ fn row_bench(c: &mut Criterion) {
     // let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
     // do_bench(c, "4096 u64(0)", cols);
     //
-    let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.3)) as ArrayRef];
-    do_bench(c, "4096 u64(0.3)", cols);
+    // let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.3)) as ArrayRef];
+    // do_bench(c, "4096 u64(0.3)", cols);
     //
     // let cols = vec![Arc::new(create_primitive_array::<Int64Type>(4096, 0.)) as ArrayRef];
     // do_bench(c, "4096 i64(0)", cols);
@@ -205,8 +205,8 @@ fn row_bench(c: &mut Criterion) {
     // let cols = vec![Arc::new(create_boolean_array(4096, 0.3, 0.5)) as ArrayRef];
     // do_bench(c, "4096 bool(0.3, 0.5)", cols);
     //
-    // let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
-    // do_bench(c, "4096 string(10, 0)", cols);
+    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
+    do_bench(c, "4096 string(10, 0)", cols);
     //
     // let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
     // do_bench(c, "4096 string(30, 0)", cols);
