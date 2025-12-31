@@ -157,12 +157,12 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
     out[0] = NON_EMPTY_SENTINEL;
 
     let len = if val.len() <= BLOCK_SIZE {
-        1 + encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], val)
+        1 + encode_blocks::<MINI_BLOCK_SIZE, {MINI_BLOCK_SIZE+1}>(&mut out[1..], val)
     } else {
         let (initial, rem) = val.split_at(BLOCK_SIZE);
-        let offset = encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], initial);
+        let offset = encode_blocks::<MINI_BLOCK_SIZE, {MINI_BLOCK_SIZE+1}>(&mut out[1..], initial);
         out[offset] = BLOCK_CONTINUATION;
-        1 + offset + encode_blocks::<BLOCK_SIZE>(&mut out[1 + offset..], rem)
+        1 + offset + encode_blocks::<BLOCK_SIZE, {BLOCK_SIZE+1}>(&mut out[1 + offset..], rem)
     };
 
     if opts.descending {
@@ -174,14 +174,17 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
 
 /// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
 #[inline(never)]
-fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
+fn encode_blocks<const SIZE: usize, const SIZE_1: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let block_count = ceil(val.len(), SIZE);
     let end_offset = block_count * (SIZE + 1);
     let to_write = &mut out[..end_offset];
 
-    let chunks = val.chunks_exact(SIZE);
-    let remainder = chunks.remainder();
-    for (input, output) in chunks.clone().zip(to_write.chunks_exact_mut(SIZE + 1)) {
+    let (chunks, remainder) = val.as_chunks::<SIZE>();
+    // let chunks = val.chunks_exact(SIZE);
+    // let remainder = chunks.remainder();
+    // let remainder = chunks.remainder();
+    let a = to_write.as_chunks_mut::<SIZE_1>().0.iter_mut();
+    for (input, output) in chunks.into_iter().zip(a) {
         let input: &[u8; SIZE] = input.try_into().unwrap();
         let out_block: &mut [u8; SIZE] = (&mut output[..SIZE]).try_into().unwrap();
 
@@ -191,14 +194,14 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
         output[SIZE] = BLOCK_CONTINUATION;
     }
 
-    // if !remainder.is_empty() {
+    if !remainder.is_empty() {
         let start_offset = (block_count - 1) * (SIZE + 1);
         to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
-        *to_write.last_mut().unwrap() = remainder.len().max(SIZE) as u8;
-    // } else {
-    //     // We must overwrite the continuation marker written by the loop above
-    //     *to_write.last_mut().unwrap() = SIZE as u8;
-    // }
+        *to_write.last_mut().unwrap() = remainder.len() as u8;
+    } else {
+        // We must overwrite the continuation marker written by the loop above
+        *to_write.last_mut().unwrap() = SIZE as u8;
+    }
     end_offset
 }
 
