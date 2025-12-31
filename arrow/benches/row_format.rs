@@ -138,11 +138,28 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
         ));
     }
 
-    for _ in 0..10 {
+
+    for _ in 0..3 {
         seed += 1;
         cols.push(Arc::new(
             create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-                batch_size, 0.0, 0, 50, "", seed,
+                batch_size, 0.0, 0, 10, "", seed,
+            ),
+        ));
+    }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 10, 20, "", seed,
+            ),
+        ));
+    }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 20, 30, "", seed,
             ),
         ));
     }
