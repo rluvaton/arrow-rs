@@ -189,7 +189,8 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
             //     }
             // }
             // #[cfg(not(target_arch = "x86_64"))]
-            encode_blocks_mini(&mut out[1..], val)
+            // encode_blocks_mini(&mut out[1..], val)
+            1 + encode_blocks::<MINI_BLOCK_SIZE, {MINI_BLOCK_SIZE+1}>(&mut out[1..], val)
         }
     } else {
         let (initial, rem) = val.split_at(BLOCK_SIZE);
