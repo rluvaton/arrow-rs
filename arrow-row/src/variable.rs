@@ -157,10 +157,10 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
     out[0] = NON_EMPTY_SENTINEL;
 
     let len = if val.len() <= BLOCK_SIZE {
-        1 + encode_blocks::<MINI_BLOCK_SIZE, {MINI_BLOCK_SIZE+1}>(&mut out[1..], val)
+        1 + encode_blocks_mini(&mut out[1..], val)
     } else {
         let (initial, rem) = val.split_at(BLOCK_SIZE);
-        let offset = encode_blocks::<MINI_BLOCK_SIZE, {MINI_BLOCK_SIZE+1}>(&mut out[1..], initial);
+        let offset = encode_blocks_mini_exact(&mut out[1..], initial);
         out[offset] = BLOCK_CONTINUATION;
         1 + offset + encode_blocks::<BLOCK_SIZE, {BLOCK_SIZE+1}>(&mut out[1 + offset..], rem)
     };
@@ -204,6 +204,73 @@ fn encode_blocks<const SIZE: usize, const SIZE_1: usize>(out: &mut [u8], val: &[
     }
     end_offset
 }
+
+/// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
+#[inline(never)]
+fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
+    let block_count = ceil(val.len(), MINI_BLOCK_SIZE);
+    let end_offset = block_count * (MINI_BLOCK_SIZE + 1);
+    let to_write = &mut out[..end_offset];
+
+    let (chunks, remainder) = val.as_chunks::<MINI_BLOCK_SIZE>();
+    // let chunks = val.chunks_exact(SIZE);
+    // let remainder = chunks.remainder();
+    // let remainder = chunks.remainder();
+    let a = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0.iter_mut();
+    for (input, output) in chunks.into_iter().zip(a) {
+        let input: &[u8; MINI_BLOCK_SIZE] = input.try_into().unwrap();
+        let out_block: &mut [u8; MINI_BLOCK_SIZE] = (&mut output[..MINI_BLOCK_SIZE]).try_into().unwrap();
+
+        *out_block = *input;
+
+        // Indicate that there are further blocks to follow
+        output[MINI_BLOCK_SIZE] = BLOCK_CONTINUATION;
+    }
+
+    if !remainder.is_empty() {
+        let start_offset = (block_count - 1) * (MINI_BLOCK_SIZE + 1);
+        to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
+        *to_write.last_mut().unwrap() = remainder.len() as u8;
+    } else {
+        // We must overwrite the continuation marker written by the loop above
+        *to_write.last_mut().unwrap() = MINI_BLOCK_SIZE as u8;
+    }
+    end_offset
+}
+
+/// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
+#[inline(never)]
+fn encode_blocks_mini_exact(out: &mut [u8], val: &[u8]) -> usize {
+    let block_count = ceil(val.len(), MINI_BLOCK_SIZE);
+    let end_offset = block_count * (MINI_BLOCK_SIZE + 1);
+    let to_write = &mut out[..end_offset];
+
+    let (chunks, remainder) = val.as_chunks::<MINI_BLOCK_SIZE>();
+    // let chunks = val.chunks_exact(SIZE);
+    // let remainder = chunks.remainder();
+    // let remainder = chunks.remainder();
+    let a = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0.iter_mut();
+    for (input, output) in chunks.into_iter().zip(a) {
+        let input: &[u8; MINI_BLOCK_SIZE] = input.try_into().unwrap();
+        let out_block: &mut [u8; MINI_BLOCK_SIZE] = (&mut output[..MINI_BLOCK_SIZE]).try_into().unwrap();
+
+        *out_block = *input;
+
+        // Indicate that there are further blocks to follow
+        output[MINI_BLOCK_SIZE] = BLOCK_CONTINUATION;
+    }
+
+    if !remainder.is_empty() {
+        let start_offset = (block_count - 1) * (MINI_BLOCK_SIZE + 1);
+        to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
+        *to_write.last_mut().unwrap() = remainder.len() as u8;
+    } else {
+        // We must overwrite the continuation marker written by the loop above
+        *to_write.last_mut().unwrap() = MINI_BLOCK_SIZE as u8;
+    }
+    end_offset
+}
+
 
 /// Decodes a single block of data
 /// The `f` function accepts a slice of the decoded data, it may be called multiple times
