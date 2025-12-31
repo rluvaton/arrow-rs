@@ -178,7 +178,15 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
     out[0] = NON_EMPTY_SENTINEL;
 
     let len = if val.len() <= BLOCK_SIZE {
-        1 + encode_blocks_mini(&mut out[1..], val)
+        1 + {
+            #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+            {
+                // SAFETY: we checked for AVX2 support via target_feature
+                unsafe { encode_blocks_mini_avx2(&mut out[1..], val) }
+            }
+            #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+            encode_blocks_mini(&mut out[1..], val)
+        }
     } else {
         let (initial, rem) = val.split_at(BLOCK_SIZE);
         let offset = encode_blocks_mini_exact(&mut out[1..], initial);
@@ -239,7 +247,6 @@ fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
 
     let to_write_chunks_mut = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0;
     while index < chunks_len {
-        std::hint::black_box(&index);
         // Get output at this index
         let output = unsafe { to_write_chunks_mut.get_unchecked_mut(index) };
 
@@ -264,6 +271,66 @@ fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
         // We must overwrite the continuation marker written by the loop above
         *to_write.last_mut().unwrap() = MINI_BLOCK_SIZE as u8;
     }
+    end_offset
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+unsafe fn encode_blocks_mini_avx2(out: &mut [u8], val: &[u8]) -> usize {
+    use std::arch::x86_64::*;
+    let len = val.len();
+    let block_count = (len + 7) / 8;
+    let end_offset = block_count * 9;
+
+    let src = val.as_ptr();
+    let dst = out.as_mut_ptr();
+
+    let full_chunks = len / 8;
+    let mut i = 0;
+
+    // Process 4 blocks at a time with AVX2
+    while i + 4 <= full_chunks {
+        let v = _mm256_loadu_si256(src.add(i * 8) as *const __m256i);
+
+        // Extract each 8-byte block and write with marker
+        let lo = _mm256_castsi256_si128(v);
+        let hi = _mm256_extracti128_si256(v, 1);
+
+        // Block 0
+        _mm_storel_epi64(dst.add(i * 9) as *mut __m128i, lo);
+        *dst.add(i * 9 + 8) = BLOCK_CONTINUATION;
+
+        // Block 1
+        _mm_storel_epi64(dst.add(i * 9 + 9) as *mut __m128i, _mm_srli_si128(lo, 8));
+        *dst.add(i * 9 + 17) = BLOCK_CONTINUATION;
+
+        // Block 2
+        _mm_storel_epi64(dst.add(i * 9 + 18) as *mut __m128i, hi);
+        *dst.add(i * 9 + 26) = BLOCK_CONTINUATION;
+
+        // Block 3
+        _mm_storel_epi64(dst.add(i * 9 + 27) as *mut __m128i, _mm_srli_si128(hi, 8));
+        *dst.add(i * 9 + 35) = BLOCK_CONTINUATION;
+
+        i += 4;
+    }
+
+    // Scalar remainder
+    while i < full_chunks {
+        std::ptr::copy_nonoverlapping(src.add(i * 8), dst.add(i * 9), 8);
+        *dst.add(i * 9 + 8) = BLOCK_CONTINUATION;
+        i += 1;
+    }
+
+    // Handle partial last block
+    let remainder = len % 8;
+    if remainder > 0 {
+        std::ptr::copy_nonoverlapping(src.add(i * 8), dst.add(i * 9), remainder);
+        *dst.add(i * 9 + 8) = remainder as u8;
+    } else if full_chunks > 0 {
+        *dst.add(full_chunks * 9 - 1) = 8u8;
+    }
+
     end_offset
 }
 
