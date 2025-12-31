@@ -179,16 +179,16 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
 
     let len = if val.len() <= BLOCK_SIZE {
         1 + {
-            #[cfg(target_arch = "x86_64")]
-            {
-                if is_x86_feature_detected!("avx2") {
-                    // SAFETY: we checked for AVX2 support via target_feature
-                    unsafe { encode_blocks_mini_avx2(&mut out[1..], val) }
-                } else {
-                    encode_blocks_mini(&mut out[1..], val)
-                }
-            }
-            #[cfg(not(target_arch = "x86_64"))]
+            // #[cfg(target_arch = "x86_64")]
+            // {
+            //     if is_x86_feature_detected!("avx2") {
+            //         // SAFETY: we checked for AVX2 support via target_feature
+            //         unsafe { encode_blocks_mini_avx2(&mut out[1..], val) }
+            //     } else {
+            //         encode_blocks_mini(&mut out[1..], val)
+            //     }
+            // }
+            // #[cfg(not(target_arch = "x86_64"))]
             encode_blocks_mini(&mut out[1..], val)
         }
     } else {
@@ -241,40 +241,44 @@ fn encode_blocks<const SIZE: usize, const SIZE_1: usize>(out: &mut [u8], val: &[
 /// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
 #[inline(never)]
 fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
-    let block_count = ceil(val.len(), MINI_BLOCK_SIZE);
-    let end_offset = block_count * (MINI_BLOCK_SIZE + 1);
-    let to_write = &mut out[..end_offset];
-    let mut index = 0;
-
-    let (chunks, remainder) = val.as_chunks::<MINI_BLOCK_SIZE>();
-    let chunks_len = chunks.len();
-
-    let to_write_chunks_mut = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0;
-    while index < chunks_len {
-        // Get output at this index
-        let output = unsafe { to_write_chunks_mut.get_unchecked_mut(index) };
-
-        // Get the same size array
-        let out_block: &mut [[u8; MINI_BLOCK_SIZE]] = unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr().cast(), MINI_BLOCK_SIZE) };
-
-        // Set the output based on the input
-        out_block[0] = unsafe { *chunks.get_unchecked(index) };
-
-        // Indicate that there are further blocks to follow
-        unsafe { *output.get_unchecked_mut(MINI_BLOCK_SIZE) = BLOCK_CONTINUATION; }
-
-        // Advance input
-        index += 1;
-     }
-
-    if !remainder.is_empty() {
-        let start_offset = (block_count - 1) * (MINI_BLOCK_SIZE + 1);
-        to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
-        *to_write.last_mut().unwrap() = remainder.len() as u8;
-    } else {
-        // We must overwrite the continuation marker written by the loop above
-        *to_write.last_mut().unwrap() = MINI_BLOCK_SIZE as u8;
+    let len = val.len();
+    if len == 0 {
+        return 0;
     }
+
+    let src = val.as_ptr();
+    let dst = out.as_mut_ptr();
+
+    // Always copy up to 32 bytes (4 blocks worth), works since len < 32
+    // Use a single 32-byte copy if available
+    let block_count = (len + 7) / 8;
+
+    // Copy all input data to a temp buffer, then scatter
+    let mut tmp = [0u8; 32];
+    unsafe { std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr(), len); }
+
+    // Write blocks unconditionally (overwrite is fine for unused ones)
+    // Block 0
+    unsafe { std::ptr::copy_nonoverlapping(tmp.as_ptr(), dst, 8); }
+    unsafe { *dst.add(8) = BLOCK_CONTINUATION; }
+
+    // Block 1
+    unsafe { std::ptr::copy_nonoverlapping(tmp.as_ptr().add(8), dst.add(9), 8); }
+    unsafe { *dst.add(17) = BLOCK_CONTINUATION; }
+
+    // Block 2
+    unsafe { std::ptr::copy_nonoverlapping(tmp.as_ptr().add(16), dst.add(18), 8); }
+    unsafe { *dst.add(26) = BLOCK_CONTINUATION; }
+
+    // Block 3
+    unsafe {std::ptr::copy_nonoverlapping(tmp.as_ptr().add(24), dst.add(27), 8); }
+    unsafe {*dst.add(35) = BLOCK_CONTINUATION; }
+
+    // Fix up the last marker based on actual length
+    let end_offset = block_count * 9;
+    let last_block_size = if len % 8 == 0 { 8 } else { len % 8 };
+    unsafe {*dst.add(end_offset - 1) = last_block_size as u8; }
+
     end_offset
 }
 
