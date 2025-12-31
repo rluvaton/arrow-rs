@@ -53,12 +53,12 @@ pub fn encoded_len(a: Option<&[u8]>) -> usize {
 
 /// Returns the length of the encoded representation of a byte array, including the null byte
 #[inline]
-pub fn encoded_len_from_bytes_len(a: Option<usize>) -> usize {
+pub(crate) fn encoded_len_from_bytes_len(a: Option<usize>) -> usize {
     padded_length(a)
 }
 
 #[inline]
-pub fn get_lengths_or_empty_for_null_for_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>, null_buffer: &NullBuffer) -> impl ExactSizeIterator<Item = Option<usize>> {
+pub(crate) fn get_lengths_or_empty_for_null_for_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>, null_buffer: &NullBuffer) -> impl ExactSizeIterator<Item = Option<usize>> {
     offsets
       .lengths()
       .zip(null_buffer.iter())
@@ -66,7 +66,7 @@ pub fn get_lengths_or_empty_for_null_for_generic_byte_array<O: OffsetSizeTrait>(
 }
 
 #[inline]
-pub fn get_lengths_for_non_null_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> impl ExactSizeIterator<Item = Option<usize>> {
+pub(crate)  fn get_lengths_for_non_null_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> impl ExactSizeIterator<Item = Option<usize>> {
     offsets
       .lengths()
       .map(Some)
@@ -239,6 +239,7 @@ fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
 
     let to_write_chunks_mut = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0;
     while index < chunks_len {
+        std::hint::black_box(&index);
         // Get output at this index
         let output = unsafe { to_write_chunks_mut.get_unchecked_mut(index) };
 
