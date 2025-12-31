@@ -187,8 +187,8 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
 }
 
 fn row_bench(c: &mut Criterion) {
-    // let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
-    // do_bench(c, "4096 u64(0)", cols);
+    let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
+    do_bench(c, "4096 u64(0)", cols);
     //
     // let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.3)) as ArrayRef];
     // do_bench(c, "4096 u64(0.3)", cols);
@@ -262,7 +262,7 @@ fn row_bench(c: &mut Criterion) {
     // let cols = vec![Arc::new(dict) as ArrayRef];
     // do_bench(c, "4096 string_dictionary_low_cardinality(100, 0)", cols);
 
-    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
+    // run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
 
     // let cols = vec![
     //     Arc::new(create_string_array_with_len::<i32>(4096, 0.5, 20)) as ArrayRef,
