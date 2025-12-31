@@ -173,7 +173,7 @@ use variable::{decode_binary_view, decode_string_view};
 
 use crate::fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
 use crate::list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
-use crate::variable::{decode_binary, decode_string, get_lengths_for_non_null_generic_byte_array, get_lengths_or_empty_for_null_for_generic_byte_array};
+use crate::variable::{decode_binary, decode_string};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
 mod fixed;
@@ -1601,21 +1601,27 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
     tracker
 }
 
-fn push_generic_byte_array_lengths<T: ByteArrayType>(tracker: &mut LengthTracker, array: &GenericByteArray<T>) {
+/// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteArray`]
+fn push_generic_byte_array_lengths<T: ByteArrayType>(
+    tracker: &mut LengthTracker,
+    array: &GenericByteArray<T>,
+) {
     if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
         tracker.push_variable(
-            get_lengths_or_empty_for_null_for_generic_byte_array(
-                array.offsets(),
-                nulls,
-            )
-              .map(|len| variable::encoded_len_from_bytes_len(len))
+            array
+                .offsets()
+                .lengths()
+                .zip(nulls.iter())
+                .map(|(length, is_valid)| if is_valid { Some(length) } else { None })
+                .map(variable::padded_length),
         )
     } else {
         tracker.push_variable(
-            get_lengths_for_non_null_generic_byte_array(
-                array.offsets(),
-            )
-              .map(|len| variable::encoded_len_from_bytes_len(len))
+            array
+                .offsets()
+                .lengths()
+                .map(Some)
+                .map(variable::padded_length),
         )
     }
 }

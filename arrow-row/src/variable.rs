@@ -20,7 +20,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, OffsetBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
@@ -48,28 +48,7 @@ pub const NON_EMPTY_SENTINEL: u8 = 2;
 /// Returns the length of the encoded representation of a byte array, including the null byte
 #[inline]
 pub fn encoded_len(a: Option<&[u8]>) -> usize {
-    encoded_len_from_bytes_len(a.map(|x| x.len()))
-}
-
-/// Returns the length of the encoded representation of a byte array, including the null byte
-#[inline]
-pub(crate) fn encoded_len_from_bytes_len(a: Option<usize>) -> usize {
-    padded_length(a)
-}
-
-#[inline]
-pub(crate) fn get_lengths_or_empty_for_null_for_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>, null_buffer: &NullBuffer) -> impl ExactSizeIterator<Item = Option<usize>> {
-    offsets
-      .lengths()
-      .zip(null_buffer.iter())
-      .map(|(length, is_valid)| if is_valid { Some(length) } else { None })
-}
-
-#[inline]
-pub(crate)  fn get_lengths_for_non_null_generic_byte_array<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> impl ExactSizeIterator<Item = Option<usize>> {
-    offsets
-      .lengths()
-      .map(Some)
+    padded_length(a.map(|x| x.len()))
 }
 
 /// Returns the padded length of the encoded length of the given length
@@ -217,153 +196,6 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     }
     end_offset
 }
-
-/// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
-#[inline(never)]
-fn encode_blocks_mini(out: &mut [u8], val: &[u8]) -> usize {
-    let len = val.len();
-    if len == 0 {
-        return 0;
-    }
-
-    let block_count = ceil(len, MINI_BLOCK_SIZE);
-    let end_offset = block_count * (MINI_BLOCK_SIZE + 1);
-
-    let src = val.as_ptr();
-    let dst = out.as_mut_ptr();
-
-    // Copy all input to temp
-    let mut tmp = [0u8; 32];
-    unsafe {
-        std::ptr::copy_nonoverlapping(src, tmp.as_mut_ptr(), len);
-    }
-
-    // Write to a temp output buffer first, then copy only what we need
-    let mut tmp_out = [0u8; 36];
-    let tmp_dst = tmp_out.as_mut_ptr();
-
-    unsafe {
-        // Block 0
-        std::ptr::copy_nonoverlapping(tmp.as_ptr(), tmp_dst, MINI_BLOCK_SIZE);
-        *tmp_dst.add(MINI_BLOCK_SIZE) = BLOCK_CONTINUATION;
-
-        // Block 1
-        std::ptr::copy_nonoverlapping(tmp.as_ptr().add(MINI_BLOCK_SIZE), tmp_dst.add(MINI_BLOCK_SIZE + 1), MINI_BLOCK_SIZE);
-        *tmp_dst.add(2 * MINI_BLOCK_SIZE + 1) = BLOCK_CONTINUATION;
-
-        // Block 2
-        std::ptr::copy_nonoverlapping(tmp.as_ptr().add(2 * MINI_BLOCK_SIZE), tmp_dst.add(2 * (MINI_BLOCK_SIZE + 1)), MINI_BLOCK_SIZE);
-        *tmp_dst.add(3 * MINI_BLOCK_SIZE + 2) = BLOCK_CONTINUATION;
-
-        // Block 3
-        std::ptr::copy_nonoverlapping(tmp.as_ptr().add(3 * MINI_BLOCK_SIZE), tmp_dst.add(3 * (MINI_BLOCK_SIZE + 1)), MINI_BLOCK_SIZE);
-        *tmp_dst.add(4 * MINI_BLOCK_SIZE + 3) = BLOCK_CONTINUATION;
-
-        // Fix up the last marker
-        let remainder = len % MINI_BLOCK_SIZE;
-        let last_block_size = if remainder == 0 { MINI_BLOCK_SIZE } else { remainder };
-        *tmp_dst.add(end_offset - 1) = last_block_size as u8;
-
-        // Copy only what we need to actual output
-        std::ptr::copy_nonoverlapping(tmp_dst, dst, end_offset);
-    }
-
-    end_offset
-}
-
-#[cfg(target_arch = "x86_64")]
-#[inline(never)]
-unsafe fn encode_blocks_mini_avx2(out: &mut [u8], val: &[u8]) -> usize {
-    use std::arch::x86_64::*;
-    let len = val.len();
-    let block_count = (len + 7) / 8;
-    let end_offset = block_count * 9;
-
-    let src = val.as_ptr();
-    let dst = out.as_mut_ptr();
-
-    let full_chunks = len / 8;
-    let mut i = 0;
-
-    // Process 4 blocks at a time with AVX2
-    while i + 4 <= full_chunks {
-        let v = _mm256_loadu_si256(src.add(i * 8) as *const __m256i);
-
-        // Extract each 8-byte block and write with marker
-        let lo = _mm256_castsi256_si128(v);
-        let hi = _mm256_extracti128_si256(v, 1);
-
-        // Block 0
-        _mm_storel_epi64(dst.add(i * 9) as *mut __m128i, lo);
-        *dst.add(i * 9 + 8) = BLOCK_CONTINUATION;
-
-        // Block 1
-        _mm_storel_epi64(dst.add(i * 9 + 9) as *mut __m128i, _mm_srli_si128(lo, 8));
-        *dst.add(i * 9 + 17) = BLOCK_CONTINUATION;
-
-        // Block 2
-        _mm_storel_epi64(dst.add(i * 9 + 18) as *mut __m128i, hi);
-        *dst.add(i * 9 + 26) = BLOCK_CONTINUATION;
-
-        // Block 3
-        _mm_storel_epi64(dst.add(i * 9 + 27) as *mut __m128i, _mm_srli_si128(hi, 8));
-        *dst.add(i * 9 + 35) = BLOCK_CONTINUATION;
-
-        i += 4;
-    }
-
-    // Scalar remainder
-    while i < full_chunks {
-        std::ptr::copy_nonoverlapping(src.add(i * 8), dst.add(i * 9), 8);
-        *dst.add(i * 9 + 8) = BLOCK_CONTINUATION;
-        i += 1;
-    }
-
-    // Handle partial last block
-    let remainder = len % 8;
-    if remainder > 0 {
-        std::ptr::copy_nonoverlapping(src.add(i * 8), dst.add(i * 9), remainder);
-        *dst.add(i * 9 + 8) = remainder as u8;
-    } else if full_chunks > 0 {
-        *dst.add(full_chunks * 9 - 1) = 8u8;
-    }
-
-    end_offset
-}
-
-/// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
-#[inline(never)]
-fn encode_blocks_mini_exact(out: &mut [u8], val: &[u8]) -> usize {
-    let block_count = ceil(val.len(), MINI_BLOCK_SIZE);
-    let end_offset = block_count * (MINI_BLOCK_SIZE + 1);
-    let to_write = &mut out[..end_offset];
-
-    let (chunks, remainder) = val.as_chunks::<MINI_BLOCK_SIZE>();
-    // let chunks = val.chunks_exact(SIZE);
-    // let remainder = chunks.remainder();
-    // let remainder = chunks.remainder();
-    let a = to_write.as_chunks_mut::<{ MINI_BLOCK_SIZE + 1 }>().0.iter_mut();
-    for (input, output) in chunks.into_iter().zip(a) {
-        let input: &[u8; MINI_BLOCK_SIZE] = input.try_into().unwrap();
-        let out_block: &mut [u8; MINI_BLOCK_SIZE] = (&mut output[..MINI_BLOCK_SIZE]).try_into().unwrap();
-
-        *out_block = *input;
-
-        // Indicate that there are further blocks to follow
-        output[MINI_BLOCK_SIZE] = BLOCK_CONTINUATION;
-    }
-
-    if !remainder.is_empty() {
-        let start_offset = (block_count - 1) * (MINI_BLOCK_SIZE + 1);
-        to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
-        *to_write.last_mut().unwrap() = remainder.len() as u8;
-    } else {
-        // We must overwrite the continuation marker written by the loop above
-        *to_write.last_mut().unwrap() = MINI_BLOCK_SIZE as u8;
-    }
-    end_offset
-}
-
 
 /// Decodes a single block of data
 /// The `f` function accepts a slice of the decoded data, it may be called multiple times
