@@ -172,7 +172,7 @@ pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usiz
     }
 }
 
-#[inline(never)]
+#[inline]
 fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
     // Write `2_u8` to demarcate as non-empty, non-null string
     out[0] = NON_EMPTY_SENTINEL;
@@ -194,7 +194,7 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
         }
     } else {
         let (initial, rem) = val.split_at(BLOCK_SIZE);
-        let offset = encode_blocks_mini_exact(&mut out[1..], initial);
+        let offset = encode_blocks::<MINI_BLOCK_SIZE, {MINI_BLOCK_SIZE+1}>(&mut out[1..], initial);
         out[offset] = BLOCK_CONTINUATION;
         1 + offset + encode_blocks::<BLOCK_SIZE, {BLOCK_SIZE+1}>(&mut out[1 + offset..], rem)
     };
@@ -207,7 +207,7 @@ fn encode_one_data(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
 }
 
 /// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
-#[inline(never)]
+#[inline]
 fn encode_blocks<const SIZE: usize, const SIZE_1: usize>(out: &mut [u8], val: &[u8]) -> usize {
     let block_count = ceil(val.len(), SIZE);
     let end_offset = block_count * (SIZE + 1);
