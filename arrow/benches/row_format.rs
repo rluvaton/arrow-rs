@@ -30,7 +30,7 @@ use arrow::util::bench_util::{
     create_string_view_array_with_max_len,
 };
 use arrow::util::data_gen::create_random_array;
-use arrow_array::types::{Int8Type, Int32Type};
+use arrow_array::types::{Int8Type, Int32Type, ByteArrayType};
 use arrow_array::{Array, ArrowPrimitiveType};
 use arrow_schema::{DataType, Field};
 use criterion::Criterion;
@@ -191,8 +191,8 @@ fn run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls<T>(
     num_cols: usize,
     batch_size: usize,
 ) where
-    T: ArrowPrimitiveType,
-    StandardUniform: Distribution<T::Native>,
+  T: ArrowPrimitiveType,
+  StandardUniform: Distribution<T::Native>,
 {
     let mut seed = 0;
 
@@ -212,7 +212,45 @@ fn run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls<T>(
             T::DATA_TYPE,
             num_cols
         )
-        .as_str(),
+          .as_str(),
+        cols,
+    );
+}
+
+struct BinaryGenOptions {
+    num_cols: usize,
+    batch_size: usize,
+    min_len: usize,
+    max_len: usize,
+}
+
+fn run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
+    c: &mut Criterion,
+    opts: BinaryGenOptions
+) {
+    let mut seed = 0;
+
+    let mut cols: Vec<ArrayRef> = vec![];
+
+    for _ in 0..opts.num_cols {
+        seed += 1;
+        cols.push(
+            Arc::new(create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                opts.batch_size, 0.0, opts.min_len, opts.max_len, "", seed,
+            )) as ArrayRef,
+        );
+    }
+
+    do_bench(
+        c,
+        format!(
+            "{} columns of StringArray str range: {}..={} batch_size: {} with no nulls",
+            opts.num_cols,
+            opts.min_len,
+            opts.max_len,
+            opts.batch_size
+        )
+          .as_str(),
         cols,
     );
 }
@@ -238,8 +276,56 @@ fn row_bench(c: &mut Criterion) {
     //     16,
     //     8192
     // );
-    run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
-        c, 50, 8192,
+    // run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
+    //     c, 50, 8192,
+    // );
+
+
+    // Strings with 1..=31 length (less than mini-block but not empty so we test encoding and not branch predictor on length
+    // run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
+    //     c,
+    //     BinaryGenOptions {
+    //         batch_size: 8192,
+    //         num_cols: 4,
+    //         min_len: 1,
+    //         max_len: 31,
+    //     },
+    // );
+    // run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
+    //     c,
+    //     BinaryGenOptions {
+    //         batch_size: 8192,
+    //         num_cols: 8,
+    //         min_len: 1,
+    //         max_len: 31,
+    //     },
+    // );
+    // run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
+    //     c,
+    //     BinaryGenOptions {
+    //         batch_size: 8192,
+    //         num_cols: 12,
+    //         min_len: 1,
+    //         max_len: 31,
+    //     },
+    // );
+    // run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
+    //     c,
+    //     BinaryGenOptions {
+    //         batch_size: 8192,
+    //         num_cols: 16,
+    //         min_len: 1,
+    //         max_len: 31,
+    //     },
+    // );
+    run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
+        c,
+        BinaryGenOptions {
+            batch_size: 8192,
+            num_cols: 50,
+            min_len: 1,
+            max_len: 31,
+        },
     );
 
     // let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
