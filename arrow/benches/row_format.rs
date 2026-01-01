@@ -30,7 +30,7 @@ use arrow::util::bench_util::{
     create_string_view_array_with_max_len,
 };
 use arrow::util::data_gen::create_random_array;
-use arrow_array::Array;
+use arrow_array::{Array, ArrowPrimitiveType};
 use arrow_array::types::{Int8Type, Int32Type};
 use arrow_schema::{DataType, Field};
 use criterion::Criterion;
@@ -186,7 +186,48 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     do_bench(c, format!("{batch_size} lot of columns").as_str(), cols);
 }
 
+fn run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls<T: ArrowPrimitiveType>(c: &mut Criterion, num_cols: usize, batch_size: usize) {
+    let mut seed = 0;
+
+    let mut cols: Vec<ArrayRef> = vec![];
+
+    for _ in 0..num_cols {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<T>(
+            batch_size, 0.0, seed,
+        )) as ArrayRef);
+    }
+
+    do_bench(c, format!("{} with {} columns at size {batch_size}", T::DATA_TYPE, num_cols).as_str(), cols);
+}
+
 fn row_bench(c: &mut Criterion) {
+    // run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
+    //     c,
+    //     4,
+    //     8192
+    // );
+    // run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
+    //     c,
+    //     8,
+    //     8192
+    // );
+    // run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
+    //     c,
+    //     12,
+    //     8192
+    // );
+    // run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
+    //     c,
+    //     16,
+    //     8192
+    // );
+    run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
+        c,
+        50,
+        8192
+    );
+
     // let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
     // do_bench(c, "4096 u64(0)", cols);
     //
@@ -205,8 +246,8 @@ fn row_bench(c: &mut Criterion) {
     // let cols = vec![Arc::new(create_boolean_array(4096, 0.3, 0.5)) as ArrayRef];
     // do_bench(c, "4096 bool(0.3, 0.5)", cols);
     //
-    let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
-    do_bench(c, "4096 string(10, 0)", cols);
+    // let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 10)) as ArrayRef];
+    // do_bench(c, "4096 string(10, 0)", cols);
     //
     // let cols = vec![Arc::new(create_string_array_with_len::<i32>(4096, 0., 30)) as ArrayRef];
     // do_bench(c, "4096 string(30, 0)", cols);
@@ -381,6 +422,7 @@ fn row_bench(c: &mut Criterion) {
     //     .slice(10, 20),
     // ];
     // do_bench(c, "4096 large_list(0) sliced to 10 of u64(0)", cols);
+
 
     // bench_iter(c);
 }
