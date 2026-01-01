@@ -30,18 +30,19 @@ use arrow::util::bench_util::{
     create_string_view_array_with_max_len,
 };
 use arrow::util::data_gen::create_random_array;
-use arrow_array::{Array, ArrowPrimitiveType};
 use arrow_array::types::{Int8Type, Int32Type};
+use arrow_array::{Array, ArrowPrimitiveType};
 use arrow_schema::{DataType, Field};
 use criterion::Criterion;
-use std::{hint, sync::Arc};
 use std::time::Duration;
+use std::{hint, sync::Arc};
+use rand::distr::{Distribution, StandardUniform};
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
-      .iter()
-      .map(|x| SortField::new(x.data_type().clone()))
-      .collect();
+        .iter()
+        .map(|x| SortField::new(x.data_type().clone()))
+        .collect();
     let mut group = c.benchmark_group("row_format");
     group.throughput(criterion::Throughput::Elements(cols.len() as u64));
 
@@ -78,8 +79,8 @@ fn bench_iter(c: &mut Criterion) {
     let col = create_string_view_array_with_len(4096, 0., 100, false);
     let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
     let rows = converter
-      .convert_columns(&[Arc::new(col) as ArrayRef])
-      .unwrap();
+        .convert_columns(&[Arc::new(col) as ArrayRef])
+        .unwrap();
 
     c.bench_function("iterate rows", |b| {
         b.iter(|| {
@@ -138,7 +139,6 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
         ));
     }
 
-
     for _ in 0..3 {
         seed += 1;
         cols.push(Arc::new(
@@ -186,19 +186,35 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     do_bench(c, format!("{batch_size} lot of columns").as_str(), cols);
 }
 
-fn run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls<T: ArrowPrimitiveType>(c: &mut Criterion, num_cols: usize, batch_size: usize) {
+fn run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls<T>(
+    c: &mut Criterion,
+    num_cols: usize,
+    batch_size: usize,
+) where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
     let mut seed = 0;
 
     let mut cols: Vec<ArrayRef> = vec![];
 
     for _ in 0..num_cols {
         seed += 1;
-        cols.push(Arc::new(create_primitive_array_with_seed::<T>(
-            batch_size, 0.0, seed,
-        )) as ArrayRef);
+        cols.push(
+            Arc::new(create_primitive_array_with_seed::<T>(batch_size, 0.0, seed)) as ArrayRef,
+        );
     }
 
-    do_bench(c, format!("{} with {} columns at size {batch_size}", T::DATA_TYPE, num_cols).as_str(), cols);
+    do_bench(
+        c,
+        format!(
+            "{} with {} columns at size {batch_size}",
+            T::DATA_TYPE,
+            num_cols
+        )
+        .as_str(),
+        cols,
+    );
 }
 
 fn row_bench(c: &mut Criterion) {
@@ -223,9 +239,7 @@ fn row_bench(c: &mut Criterion) {
     //     8192
     // );
     run_bench_on_multi_column_with_same_fixed_size_data_type_with_no_nulls::<UInt64Type>(
-        c,
-        50,
-        8192
+        c, 50, 8192,
     );
 
     // let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
@@ -423,11 +437,10 @@ fn row_bench(c: &mut Criterion) {
     // ];
     // do_bench(c, "4096 large_list(0) sliced to 10 of u64(0)", cols);
 
-
     // bench_iter(c);
 }
 
-criterion_group!{
+criterion_group! {
     name = benches;
     config = Criterion::default().measurement_time(Duration::from_secs(10));
     targets = row_bench
