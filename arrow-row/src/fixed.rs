@@ -45,7 +45,7 @@ impl<const N: usize> FromSlice for [u8; N] {
 /// Encodes a value of a particular fixed width type into bytes according to the rules
 /// described on [`super::RowConverter`]
 pub trait FixedLengthEncoding: Copy {
-    const ENCODED_LEN: usize = 1 + std::mem::size_of::<Self::Encoded>();
+    const ENCODED_LEN: usize = 2 + std::mem::size_of::<Self::Encoded>();
 
     type Encoded: Sized + Copy + FromSlice + AsRef<[u8]> + AsMut<[u8]>;
 
@@ -113,21 +113,21 @@ macro_rules! encode_unsigned {
 encode_unsigned!(1, u8);
 encode_unsigned!(2, u16);
 encode_unsigned!(4, u32);
-// encode_unsigned!(8, u64);
-impl FixedLengthEncoding for u64 {
-    // override encoded len to avoid the +1 for the nullability
-    const ENCODED_LEN: usize = std::mem::size_of::<Self::Encoded>();
-
-    type Encoded = [u8; 8];
-
-    fn encode(self) -> [u8; 8] {
-        self.to_be_bytes()
-    }
-
-    fn decode(encoded: Self::Encoded) -> Self {
-        Self::from_be_bytes(encoded)
-    }
-}
+encode_unsigned!(8, u64);
+// impl FixedLengthEncoding for u64 {
+//     // override encoded len to avoid the +1 for the nullability
+//     const ENCODED_LEN: usize = std::mem::size_of::<Self::Encoded>();
+//
+//     type Encoded = [u8; 8];
+//
+//     fn encode(self) -> [u8; 8] {
+//         self.to_be_bytes()
+//     }
+//
+//     fn decode(encoded: Self::Encoded) -> Self {
+//         Self::from_be_bytes(encoded)
+//     }
+// }
 
 impl FixedLengthEncoding for f16 {
     type Encoded = [u8; 2];
@@ -270,13 +270,14 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
         let end_offset = *offset + T::ENCODED_LEN;
 
         let to_write = &mut data[*offset..end_offset];
-        // to_write[0] = 1;
+        to_write[0] = 0;
+        to_write[1] = 1;
         let mut encoded = val.encode();
         if opts.descending {
             // Flip bits to reverse order
             encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
         }
-        to_write[0..].copy_from_slice(encoded.as_ref());
+        to_write[2..].copy_from_slice(encoded.as_ref());
 
         *offset = end_offset;
     }
