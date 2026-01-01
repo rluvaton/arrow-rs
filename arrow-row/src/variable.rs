@@ -213,8 +213,6 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     end_offset
 }
 
-
-
 /// Faster encode_blocks that first copy all the data and then iterate over it and
 #[inline]
 fn fast_encode_bytes(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {

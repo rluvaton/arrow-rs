@@ -288,7 +288,7 @@ fn row_bench(c: &mut Criterion) {
     //         batch_size: 8192,
     //         num_cols: 4,
     //         min_len: 1,
-    //         max_len: 31,
+    //         max_len: 30,
     //     },
     // );
     // run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
@@ -297,7 +297,7 @@ fn row_bench(c: &mut Criterion) {
     //         batch_size: 8192,
     //         num_cols: 8,
     //         min_len: 1,
-    //         max_len: 31,
+    //         max_len: 30,
     //     },
     // );
     // run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
@@ -306,7 +306,7 @@ fn row_bench(c: &mut Criterion) {
     //         batch_size: 8192,
     //         num_cols: 12,
     //         min_len: 1,
-    //         max_len: 31,
+    //         max_len: 30,
     //     },
     // );
     // run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
@@ -315,7 +315,7 @@ fn row_bench(c: &mut Criterion) {
     //         batch_size: 8192,
     //         num_cols: 16,
     //         min_len: 1,
-    //         max_len: 31,
+    //         max_len: 30,
     //     },
     // );
     run_bench_on_multi_column_with_same_string_data_type_with_no_nulls(
@@ -324,7 +324,7 @@ fn row_bench(c: &mut Criterion) {
             batch_size: 8192,
             num_cols: 50,
             min_len: 1,
-            max_len: 31,
+            max_len: 30,
         },
     );
 
