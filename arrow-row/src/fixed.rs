@@ -262,7 +262,20 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
             // Flip bits to reverse order
             encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
         }
-        to_write[1..].copy_from_slice(encoded.as_ref());
+        unsafe {
+            // Taken from std::ptr::write_unaligned
+            // std::ptr::write_unaligned(to_write.as_mut_ptr().add(1) as *mut u64, encoded.as_ref().as_ptr());
+            let src = encoded.as_ref().as_ptr();
+            std::ptr::copy_nonoverlapping(
+                src,
+                to_write.as_mut_ptr().add(1),
+                T::ENCODED_LEN - 1
+            );
+            // We are calling the intrinsic directly to avoid function calls in the generated code.
+
+            // std::intrinsics::forget(src);
+        }
+        // to_write[1..].copy_from_slice(encoded.as_ref());
 
         *offset = end_offset;
     }
