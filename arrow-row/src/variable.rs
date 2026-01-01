@@ -40,10 +40,17 @@ pub const MINI_BLOCK_SIZE: usize = BLOCK_SIZE / MINI_BLOCK_COUNT;
 pub const BLOCK_CONTINUATION: u8 = 0xFF;
 
 /// Indicates an empty string
-pub const EMPTY_SENTINEL: u8 = 1;
+pub const EMPTY_SENTINEL: u8 = 0b00000001;
 
 /// Indicates a non-empty string
-pub const NON_EMPTY_SENTINEL: u8 = 2;
+pub const NON_EMPTY_SENTINEL: u8 = 0b00000010;
+pub const NULL_SENTINEL: u8 = 0b10000000;
+
+// u8 must be smaller value than u16 in the bit representation so we can sort by them
+pub const LENGTH_TYPE_U8: u8 = 0b00000100;
+pub const LENGTH_TYPE_U16: u8 = 0b00001000;
+pub const LENGTH_TYPE_U32: u8 = 0b00010000;
+pub const LENGTH_TYPE_U64: u8 = 0b00100000;
 
 /// Returns the length of the encoded representation of a byte array, including the null byte
 #[inline]
@@ -51,17 +58,25 @@ pub fn encoded_len(a: Option<&[u8]>) -> usize {
     padded_length(a.map(|x| x.len()))
 }
 
+#[inline]
+fn get_number_of_bits_needed_to_encode(len: usize) -> usize {
+    (usize::BITS as usize - len.leading_zeros() as usize + 7) / 8
+}
+
 /// Returns the padded length of the encoded length of the given length
 #[inline]
 pub fn padded_length(a: Option<usize>) -> usize {
-    match a {
-        Some(a) if a <= BLOCK_SIZE => 1 + ceil(a, MINI_BLOCK_SIZE) * (MINI_BLOCK_SIZE + 1),
-        // Each miniblock ends with a 1 byte continuation, therefore add
-        // `(MINI_BLOCK_COUNT - 1)` additional bytes over non-miniblock size
-        Some(a) => MINI_BLOCK_COUNT + ceil(a, BLOCK_SIZE) * (BLOCK_SIZE + 1),
-        None => 1,
-    }
+    let value_len = match a {
+        None => 0,
+        Some(a) if a == 0 => 0,
+        Some(a) => get_number_of_bits_needed_to_encode(a) + a,
+    };
+
+    value_len
+      // ctrl byte
+      + 1
 }
+
 
 /// Variable length values are encoded as
 ///
@@ -144,26 +159,27 @@ pub fn encode_empty(out: &mut [u8], opts: SortOptions) -> usize {
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usize {
     match val {
         None => encode_null(out, opts),
-        Some([]) => encode_empty(out, opts),
-        Some(val) => {
-            // Write `2_u8` to demarcate as non-empty, non-null string
-            out[0] = NON_EMPTY_SENTINEL;
-
-            let len = if val.len() <= BLOCK_SIZE {
-                1 + encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], val)
-            } else {
-                let (initial, rem) = val.split_at(BLOCK_SIZE);
-                let offset = encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], initial);
-                out[offset] = BLOCK_CONTINUATION;
-                1 + offset + encode_blocks::<BLOCK_SIZE>(&mut out[1 + offset..], rem)
-            };
-
-            if opts.descending {
-                // Invert bits
-                out[..len].iter_mut().for_each(|v| *v = !*v)
-            }
-            len
-        }
+        Some(val) => fast_encode_bytes(out, val, opts),
+        // Some([]) => encode_empty(out, opts),
+        // Some(val) => {
+        //     // Write `2_u8` to demarcate as non-empty, non-null string
+        //     out[0] = NON_EMPTY_SENTINEL;
+        //
+        //     let len = if val.len() <= BLOCK_SIZE {
+        //         1 + encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], val)
+        //     } else {
+        //         let (initial, rem) = val.split_at(BLOCK_SIZE);
+        //         let offset = encode_blocks::<MINI_BLOCK_SIZE>(&mut out[1..], initial);
+        //         out[offset] = BLOCK_CONTINUATION;
+        //         1 + offset + encode_blocks::<BLOCK_SIZE>(&mut out[1 + offset..], rem)
+        //     };
+        //
+        //     if opts.descending {
+        //         // Invert bits
+        //         out[..len].iter_mut().for_each(|v| *v = !*v)
+        //     }
+        //     len
+        // }
     }
 }
 
@@ -196,6 +212,154 @@ fn encode_blocks<const SIZE: usize>(out: &mut [u8], val: &[u8]) -> usize {
     }
     end_offset
 }
+
+
+
+/// Faster encode_blocks that first copy all the data and then iterate over it and
+#[inline]
+fn fast_encode_bytes(out: &mut [u8], val: &[u8], opts: SortOptions) -> usize {
+    // Write `2_u8` to demarcate as non-empty, non-null string
+    out[0] = NON_EMPTY_SENTINEL;
+
+    // TODO - in desc should do max minus the length so the order will be different (longer strings sort before shorter ones)
+    let start_data_offset = {
+        let len = val.len();
+
+        match get_number_of_bits_needed_to_encode(len) {
+            0 => {
+                out[0] = EMPTY_SENTINEL;
+                return 1;
+            }
+            1 => {
+                out[0] |= LENGTH_TYPE_U8;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u8>();
+                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u8).to_be_bytes());
+
+                start_data_offset
+            }
+            2 => {
+                out[0] |= LENGTH_TYPE_U16;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u16>();
+                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u16).to_be_bytes());
+
+                start_data_offset
+            }
+            4 => {
+                out[0] |= LENGTH_TYPE_U32;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u32>();
+                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u32).to_be_bytes());
+
+                start_data_offset
+            }
+            8 => {
+                out[0] |= LENGTH_TYPE_U64;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u64>();
+                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u64).to_be_bytes());
+
+                start_data_offset
+            }
+            bits_required => {
+                unreachable!("invalid length type {len}. numbr of bits required {bits_required}");
+            }
+        }
+    };
+
+    let len = start_data_offset + val.len();
+    out[start_data_offset..len].copy_from_slice(val);
+
+    len
+}
+
+/// Decodes a single block of data
+/// The `f` function accepts a slice of the decoded data, it may be called multiple times
+pub fn decode_blocks_fast(row: &[u8], options: SortOptions, f: impl FnMut(&[u8])) -> usize {
+    decode_blocks_fast_order(row, f)
+}
+
+/// Decodes a single block of data
+/// The `f` function accepts a slice of the decoded data, it may be called multiple times
+pub fn decode_blocks_fast_order(row: &[u8], mut f: impl FnMut(&[u8])) -> usize {
+    // TODO - we can avoid the no if we change the ifs
+    let normalized_ctrl_byte = row[0];
+
+    if normalized_ctrl_byte & NON_EMPTY_SENTINEL == 0 {
+        // Empty or null string
+        return 1;
+    }
+
+    let (len, start_offset) = if normalized_ctrl_byte | LENGTH_TYPE_U8 > 0 {
+        let len_normalized = row[1];
+        let len = len_normalized as usize;
+        (len, size_of::<u8>())
+    } else if normalized_ctrl_byte | LENGTH_TYPE_U16 > 0 {
+        let bytes_needed: [u8; 2] = row[1..=1 + size_of::<u16>()].try_into().unwrap();
+        let raw_len = u16::from_be_bytes(bytes_needed);
+        let len_normalized = raw_len;
+
+        (len_normalized as usize, size_of::<u16>())
+    } else if normalized_ctrl_byte | LENGTH_TYPE_U32 > 0 {
+        let bytes_needed: [u8; 4] = row[1..=1 + size_of::<u32>()].try_into().unwrap();
+        let raw_len = u32::from_be_bytes(bytes_needed);
+        let len_normalized = raw_len;
+
+        (len_normalized as usize, size_of::<u32>())
+    } else if normalized_ctrl_byte | LENGTH_TYPE_U64 > 0 {
+        let bytes_needed: [u8; 8] = row[1..=1 + size_of::<u64>()].try_into().unwrap();
+        let raw_len = u64::from_be_bytes(bytes_needed);
+        let len_normalized = raw_len;
+
+        (len_normalized as usize, size_of::<u64>())
+    } else {
+        unreachable!("invalid length type");
+    };
+
+    // + 1 for the control byte
+    let start_offset = start_offset + 1;
+
+    f(&row[start_offset..start_offset + len]);
+    start_offset + len
+}
+//
+// /// Writes `val` in `SIZE` blocks with the appropriate continuation tokens
+// #[inline]
+// fn encode_mini_blocks(out: &mut [u8], val: &[u8]) -> usize {
+//     const SIZE: usize = MINI_BLOCK_SIZE;
+//
+//
+//     let block_count = ceil(val.len(), SIZE);
+//     let end_offset = block_count * (SIZE + 1);
+//     let to_write = &mut out[..end_offset];
+//
+//     let chunks = val.chunks_exact(SIZE);
+//     let remainder = chunks.remainder();
+//     for (input, output) in chunks.clone().zip(to_write.chunks_exact_mut(SIZE + 1)) {
+//         let input: &[u8; SIZE] = input.try_into().unwrap();
+//         let out_block: &mut [u8; SIZE] = (&mut output[..SIZE]).try_into().unwrap();
+//
+//         *out_block = *input;
+//
+//         // Indicate that there are further blocks to follow
+//         output[SIZE] = BLOCK_CONTINUATION;
+//     }
+//
+//     if !remainder.is_empty() {
+//         let start_offset = (block_count - 1) * (SIZE + 1);
+//         to_write[start_offset..start_offset + remainder.len()].copy_from_slice(remainder);
+//         *to_write.last_mut().unwrap() = remainder.len() as u8;
+//     } else {
+//         // We must overwrite the continuation marker written by the loop above
+//         *to_write.last_mut().unwrap() = SIZE as u8;
+//     }
+//     end_offset
+// }
 
 /// Decodes a single block of data
 /// The `f` function accepts a slice of the decoded data, it may be called multiple times
