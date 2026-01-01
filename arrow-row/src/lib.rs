@@ -1498,15 +1498,35 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     array => tracker.push_fixed(fixed::encoded_len(array)),
                     DataType::Null => {},
                     DataType::Boolean => tracker.push_fixed(bool::ENCODED_LEN),
-                    DataType::Binary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i32>(array)),
-                    DataType::LargeBinary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i64>(array)),
+                    // DataType::Binary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i32>(array)),
+                     DataType::Binary => tracker.push_variable(
+                        as_generic_binary_array::<i32>(array)
+                            .iter()
+                            .map(|slice| variable::encoded_len(slice))
+                    ),
+                    // DataType::LargeBinary => push_generic_byte_array_lengths(&mut tracker, as_generic_binary_array::<i64>(array)),
+                    DataType::LargeBinary => tracker.push_variable(
+                        as_generic_binary_array::<i64>(array)
+                            .iter()
+                            .map(|slice| variable::encoded_len(slice))
+                    ),
                     DataType::BinaryView => tracker.push_variable(
                         array.as_binary_view()
                             .iter()
                             .map(|slice| variable::encoded_len(slice))
                     ),
-                    DataType::Utf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i32>()),
-                    DataType::LargeUtf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i64>()),
+                    // DataType::Utf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i32>()),
+                    DataType::Utf8 => tracker.push_variable(
+                        array.as_string::<i32>()
+                            .iter()
+                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
+                    ),
+                    // DataType::LargeUtf8 => push_generic_byte_array_lengths(&mut tracker, array.as_string::<i64>()),
+                    DataType::LargeUtf8 => tracker.push_variable(
+                        array.as_string::<i64>()
+                            .iter()
+                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
+                    ),
                     DataType::Utf8View => tracker.push_variable(
                         array.as_string_view()
                             .iter()
