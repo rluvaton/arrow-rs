@@ -113,7 +113,21 @@ macro_rules! encode_unsigned {
 encode_unsigned!(1, u8);
 encode_unsigned!(2, u16);
 encode_unsigned!(4, u32);
-encode_unsigned!(8, u64);
+// encode_unsigned!(8, u64);
+impl FixedLengthEncoding for u64 {
+    // override encoded len to avoid the +1 for the nullability
+    const ENCODED_LEN: usize = std::mem::size_of::<Self::Encoded>();
+
+    type Encoded = [u8; 8];
+
+    fn encode(self) -> [u8; 8] {
+        self.to_be_bytes()
+    }
+
+    fn decode(encoded: Self::Encoded) -> Self {
+        Self::from_be_bytes(encoded)
+    }
+}
 
 impl FixedLengthEncoding for f16 {
     type Encoded = [u8; 2];
@@ -256,26 +270,13 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
         let end_offset = *offset + T::ENCODED_LEN;
 
         let to_write = &mut data[*offset..end_offset];
-        to_write[0] = 1;
+        // to_write[0] = 1;
         let mut encoded = val.encode();
         if opts.descending {
             // Flip bits to reverse order
             encoded.as_mut().iter_mut().for_each(|v| *v = !*v)
         }
-        unsafe {
-            // Taken from std::ptr::write_unaligned
-            // std::ptr::write_unaligned(to_write.as_mut_ptr().add(1) as *mut u64, encoded.as_ref().as_ptr());
-            let src = encoded.as_ref().as_ptr();
-            std::ptr::copy_nonoverlapping(
-                src,
-                to_write.as_mut_ptr().add(1),
-                T::ENCODED_LEN - 1
-            );
-            // We are calling the intrinsic directly to avoid function calls in the generated code.
-
-            // std::intrinsics::forget(src);
-        }
-        // to_write[1..].copy_from_slice(encoded.as_ref());
+        to_write[0..].copy_from_slice(encoded.as_ref());
 
         *offset = end_offset;
     }
