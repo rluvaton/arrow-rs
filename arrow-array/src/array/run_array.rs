@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, RunEndBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{ArrowError, DataType, Field};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef};
 
 use crate::{
     Array, ArrayAccessor, ArrayRef, PrimitiveArray,
@@ -219,6 +219,25 @@ impl<R: RunEndIndexType> RunArray<R> {
             data_type: self.data_type.clone(),
             run_ends: self.run_ends.slice(offset, length),
             values: self.values.clone(),
+        }
+    }
+
+    /// Replace the values of the run array with another values,
+    pub fn with_values(&self, values_field: FieldRef, values: ArrayRef) -> Self {
+        assert_eq!(self.values.data_type(), values_field.data_type(), "values field data type must match");
+        if !values_field.is_nullable() {
+            // TODO - this might be expensive, check what we should do
+            assert_eq!(self.values.logical_null_count(), 0, "Values field is not nullable so it must not have any nulls");
+        }
+
+        let DataType::RunEndEncoded(run_ends, _old_value_type) = &self.data_type else {
+            unreachable!("RunArray data_type is not RunEndEncoded")
+        };
+
+        Self {
+            data_type: DataType::RunEndEncoded(Arc::clone(run_ends), values_field),
+            run_ends: self.run_ends.clone(),
+            values,
         }
     }
 }
