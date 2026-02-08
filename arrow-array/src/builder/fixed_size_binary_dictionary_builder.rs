@@ -68,6 +68,7 @@ where
     keys_builder: PrimitiveBuilder<K>,
     values_builder: FixedSizeBinaryBuilder,
     byte_width: i32,
+    last_default_index: Option<K::Native>,
 }
 
 impl<K> FixedSizeBinaryDictionaryBuilder<K>
@@ -84,6 +85,7 @@ where
             keys_builder,
             values_builder,
             byte_width,
+            last_default_index: None
         }
     }
 
@@ -99,6 +101,7 @@ where
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder: FixedSizeBinaryBuilder::with_capacity(value_capacity, byte_width),
             byte_width,
+            last_default_index: None
         }
     }
 
@@ -164,6 +167,7 @@ where
                 .expect("underlying buffer has no references"),
             values_builder,
             byte_width,
+            last_default_index: None
         })
     }
 }
@@ -200,6 +204,50 @@ where
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+
+    /// Appends a null slot into the builder
+    #[inline]
+    fn append_null(&mut self) {
+        self.keys_builder.append_null()
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        self.keys_builder.append_nulls(n);
+    }
+
+    #[inline]
+    fn append_default(&mut self) {
+        match self.last_default_index {
+            Some(key) => {
+                self.keys_builder.append_value(key);
+            },
+            None => {
+                let empty = vec![0u8; self.byte_width as usize];
+
+                let key = self.append(&empty).expect("dictionary key overflow");
+                self.last_default_index = Some(key);
+            }
+        }
+    }
+
+    #[inline]
+    fn append_defaults(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        match self.last_default_index {
+            Some(key) => {
+                self.keys_builder.append_value_n(key, n);
+            },
+            None => {
+                self.append_default();
+                let key = self.last_default_index.unwrap();
+                self.keys_builder.append_value_n(key, n - 1);
+            }
+        }
     }
 }
 
@@ -274,18 +322,6 @@ where
         }
     }
 
-    /// Appends a null slot into the builder
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.keys_builder.append_null()
-    }
-
-    /// Appends `n` `null`s into the builder.
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.keys_builder.append_nulls(n);
-    }
-
     /// Infallibly append a value to this builder
     ///
     /// # Panics
@@ -300,6 +336,9 @@ where
         self.dedup.clear();
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
+
+        // Remove the last default index as the values were reset
+        self.last_default_index.take();
 
         let data_type = DataType::Dictionary(
             Box::new(K::DATA_TYPE),
@@ -319,6 +358,8 @@ where
     pub fn finish_cloned(&self) -> DictionaryArray<K> {
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
+
+        // Do no remove the last default index as the values are kept
 
         let data_type = DataType::Dictionary(
             Box::new(K::DATA_TYPE),
@@ -354,6 +395,8 @@ where
     pub fn finish_preserve_values(&mut self) -> DictionaryArray<K> {
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
+
+        // No need to remove the last default index as the values are still valid
 
         let data_type = DataType::Dictionary(
             Box::new(K::DATA_TYPE),

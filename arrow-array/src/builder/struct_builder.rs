@@ -125,6 +125,43 @@ impl ArrayBuilder for StructBuilder {
         self.null_buffer_builder.len()
     }
 
+    /// Appends a null element to the struct.
+    #[inline]
+    fn append_null(&mut self) {
+        // TODO - assert that childs have the same length as the null here
+        // TODO - should append child
+        for builder in &mut self.field_builders {
+            builder.append_default();
+        }
+        self.append(false);
+    }
+
+    /// Appends `n` `null`s into the builder. and default values to the childs
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        // TODO - assert that childs have the same length as the null here
+        // TODO - should append child
+        for builder in &mut self.field_builders {
+            builder.append_defaults(n);
+        }
+        self.null_buffer_builder.append_slice(&vec![false; n]);
+    }
+
+    fn append_default(&mut self) {
+        for builder in &mut self.field_builders {
+            builder.append_default();
+        }
+        self.append(true);
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        for builder in &mut self.field_builders {
+            builder.append_defaults(n);
+        }
+        // TODO - should append child
+        self.null_buffer_builder.append_n_non_nulls(n);
+    }
+
     /// Builds the array.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
@@ -211,18 +248,6 @@ impl StructBuilder {
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
         self.null_buffer_builder.append(is_valid);
-    }
-
-    /// Appends a null element to the struct.
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.append(false)
-    }
-
-    /// Appends `n` `null`s into the builder.
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_slice(&vec![false; n]);
     }
 
     /// Builds the `StructArray` and reset this builder.

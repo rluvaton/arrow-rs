@@ -43,6 +43,8 @@ where
 
     keys_builder: PrimitiveBuilder<K>,
     values_builder: GenericByteBuilder<T>,
+
+    last_default_index: Option<K::Native>,
 }
 
 impl<K, T> Default for GenericByteDictionaryBuilder<K, T>
@@ -69,6 +71,7 @@ where
             dedup: HashTable::with_capacity(keys_builder.capacity()),
             keys_builder,
             values_builder,
+              last_default_index: None,
         }
     }
 
@@ -87,6 +90,8 @@ where
             dedup: Default::default(),
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder: GenericByteBuilder::<T>::with_capacity(value_capacity, data_capacity),
+            last_default_index: None,
+
         }
     }
 
@@ -153,6 +158,7 @@ where
             dedup,
             keys_builder: PrimitiveBuilder::with_capacity(keys_capacity),
             values_builder,
+            last_default_index: None,
         })
     }
 
@@ -218,6 +224,8 @@ where
                 .into_builder()
                 .expect("underlying buffer has no references"),
             values_builder,
+            last_default_index: None,
+
         })
     }
 }
@@ -255,6 +263,49 @@ where
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+
+    /// Appends a null slot into the builder
+    #[inline]
+    fn append_null(&mut self) {
+        self.keys_builder.append_null()
+    }
+
+    /// Infallibly append `n` null slots into the builder
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        self.keys_builder.append_nulls(n)
+    }
+
+    #[inline]
+    fn append_default(&mut self) {
+        match self.last_default_index {
+            Some(key) => {
+                self.keys_builder.append_value(key);
+            },
+            None => {
+
+                let key = self.append(&empty).expect("dictionary key overflow");
+                self.last_default_index = Some(key);
+            }
+        }
+    }
+
+    #[inline]
+    fn append_defaults(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        match self.last_default_index {
+            Some(key) => {
+                self.keys_builder.append_value_n(key, n);
+            },
+            None => {
+                self.append_default();
+                let key = self.last_default_index.unwrap();
+                self.keys_builder.append_value_n(key, n - 1);
+            }
+        }
     }
 }
 
@@ -333,18 +384,6 @@ where
     pub fn append_values(&mut self, value: impl AsRef<T::Native>, count: usize) {
         self.append_n(value, count)
             .expect("dictionary key overflow");
-    }
-
-    /// Appends a null slot into the builder
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.keys_builder.append_null()
-    }
-
-    /// Infallibly append `n` null slots into the builder
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.keys_builder.append_nulls(n)
     }
 
     /// Append an `Option` value into the builder
@@ -436,6 +475,9 @@ where
         let values = self.values_builder.finish();
         let keys = self.keys_builder.finish();
 
+        // Reset the last default index as the values reset
+        self.last_default_index.take();
+
         let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
         let builder = keys
@@ -451,6 +493,8 @@ where
     pub fn finish_cloned(&self) -> DictionaryArray<K> {
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish_cloned();
+
+        // Do not reset the last default index as the values are kept
 
         let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 
@@ -483,6 +527,8 @@ where
     pub fn finish_preserve_values(&mut self) -> DictionaryArray<K> {
         let values = self.values_builder.finish_cloned();
         let keys = self.keys_builder.finish();
+
+        // Do not reset the last default index as the values are kept
 
         let data_type = DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(T::DATA_TYPE));
 

@@ -86,22 +86,6 @@ impl FixedSizeBinaryBuilder {
         }
     }
 
-    /// Append a null value to the array.
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.values_builder
-            .extend(std::iter::repeat_n(0u8, self.value_length as usize));
-        self.null_buffer_builder.append_null();
-    }
-
-    /// Appends `n` `null`s into the builder.
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.values_builder
-            .extend(std::iter::repeat_n(0u8, self.value_length as usize * n));
-        self.null_buffer_builder.append_n_nulls(n);
-    }
-
     /// Appends all elements in array into the builder.
     pub fn append_array(&mut self, array: &FixedSizeBinaryArray) -> Result<(), ArrowError> {
         if self.value_length != array.value_length() {
@@ -182,6 +166,36 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+
+    /// Append a null value to the array.
+    #[inline]
+    fn append_null(&mut self) {
+        self.values_builder
+          .extend(std::iter::repeat_n(0u8, self.value_length as usize));
+        self.null_buffer_builder.append_null();
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        self.values_builder
+          .extend(std::iter::repeat_n(0u8, self.value_length as usize * n));
+        self.null_buffer_builder.append_n_nulls(n);
+    }
+
+    #[inline]
+    fn append_default(&mut self) {
+        self.values_builder
+          .extend(std::iter::repeat_n(0u8, self.value_length as usize));
+        self.null_buffer_builder.append_non_null();
+    }
+
+    #[inline]
+    fn append_defaults(&mut self, n: usize) {
+        self.values_builder
+          .extend(std::iter::repeat_n(0u8, self.value_length as usize * n));
+        self.null_buffer_builder.append_n_non_nulls(n);
     }
 }
 

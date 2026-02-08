@@ -166,6 +166,36 @@ where
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
     }
+
+    /// Append a null to this [`GenericListBuilder`]
+    ///
+    /// See [`Self::append_value`] for an example use.
+    #[inline]
+    fn append_null(&mut self) {
+        self.offsets_builder.push(self.next_offset());
+        self.null_buffer_builder.append_null();
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        let next_offset = self.next_offset();
+        self.offsets_builder
+          .extend(std::iter::repeat_n(next_offset, n));
+        self.null_buffer_builder.append_n_nulls(n);
+    }
+
+    fn append_default(&mut self) {
+        self.offsets_builder.push(self.next_offset());
+        self.null_buffer_builder.append_non_null();
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        let next_offset = self.next_offset();
+        self.offsets_builder
+          .extend(std::iter::repeat_n(next_offset, n));
+        self.null_buffer_builder.append_n_non_nulls(n);
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T>
@@ -259,24 +289,6 @@ where
         I: IntoIterator<Item = Option<V>>,
     {
         self.extend(std::iter::once(Some(i)))
-    }
-
-    /// Append a null to this [`GenericListBuilder`]
-    ///
-    /// See [`Self::append_value`] for an example use.
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.offsets_builder.push(self.next_offset());
-        self.null_buffer_builder.append_null();
-    }
-
-    /// Appends `n` `null`s into the builder.
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        let next_offset = self.next_offset();
-        self.offsets_builder
-            .extend(std::iter::repeat_n(next_offset, n));
-        self.null_buffer_builder.append_n_nulls(n);
     }
 
     /// Appends an optional value into this [`GenericListBuilder`]

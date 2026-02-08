@@ -365,6 +365,22 @@ impl ArrayBuilder for UnionBuilder {
         self.len
     }
 
+    fn append_null(&mut self) {
+        todo!()
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        todo!()
+    }
+
+    fn append_default(&mut self) {
+        todo!()
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        todo!()
+    }
+
     /// Builds the array
     fn finish(&mut self) -> ArrayRef {
         // Even simpler - just move the builder using mem::take and replace with default

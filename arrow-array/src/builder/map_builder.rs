@@ -259,6 +259,30 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
         self.null_buffer_builder.len()
     }
 
+    fn append_null(&mut self) {
+        assert_eq!(self.key_builder.len(), self.value_builder.len(), "Cannot append to a map builder when its keys and values have unequal lengths.");
+        self.offsets_builder.push(self.key_builder.len() as i32);
+        self.null_buffer_builder.append_null();
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        assert_eq!(self.key_builder.len(), self.value_builder.len(), "Cannot append to a map builder when its keys and values have unequal lengths.");
+        self.offsets_builder.extend(std::iter::repeat_n(self.key_builder.len() as i32, n));
+        self.null_buffer_builder.append_n_nulls(n);
+    }
+
+    fn append_default(&mut self) {
+        assert_eq!(self.key_builder.len(), self.value_builder.len(), "Cannot append to a map builder when its keys and values have unequal lengths.");
+        self.offsets_builder.push(self.key_builder.len() as i32);
+        self.null_buffer_builder.append_non_null();
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        assert_eq!(self.key_builder.len(), self.value_builder.len(), "Cannot append to a map builder when its keys and values have unequal lengths.");
+        self.offsets_builder.extend(std::iter::repeat_n(self.key_builder.len() as i32, n));
+        self.null_buffer_builder.append_n_non_nulls(n);
+    }
+
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }

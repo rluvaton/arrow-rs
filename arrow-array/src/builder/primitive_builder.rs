@@ -133,6 +133,32 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
     }
+
+    /// Appends a null slot into the builder
+    #[inline]
+    fn append_null(&mut self) {
+        self.null_buffer_builder.append_null();
+        self.values_builder.push(T::Native::default());
+    }
+
+    /// Appends `n` no. of null's into the builder
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
+        self.values_builder
+          .extend(std::iter::repeat_n(T::Native::default(), n));
+    }
+
+    fn append_default(&mut self) {
+        self.null_buffer_builder.append_non_null();
+        self.values_builder.push(T::Native::default());
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_non_nulls(n);
+        self.values_builder
+          .extend(std::iter::repeat_n(T::Native::default(), n));
+    }
 }
 
 impl<T: ArrowPrimitiveType> Default for PrimitiveBuilder<T> {
@@ -211,21 +237,6 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn append_value_n(&mut self, v: T::Native, n: usize) {
         self.null_buffer_builder.append_n_non_nulls(n);
         self.values_builder.extend(std::iter::repeat_n(v, n));
-    }
-
-    /// Appends a null slot into the builder
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.null_buffer_builder.append_null();
-        self.values_builder.push(T::Native::default());
-    }
-
-    /// Appends `n` no. of null's into the builder
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_n_nulls(n);
-        self.values_builder
-            .extend(std::iter::repeat_n(T::Native::default(), n));
     }
 
     /// Appends an `Option<T>` into the builder

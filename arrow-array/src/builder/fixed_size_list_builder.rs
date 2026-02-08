@@ -126,6 +126,8 @@ where
         self
     }
 
+
+
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
@@ -139,6 +141,27 @@ where
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+
+    #[inline]
+    fn append_null(&mut self) {
+        self.null_buffer_builder.append_null();
+        self.values_builder.append_defaults(self.list_len as usize);
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
+        self.values_builder.append_defaults(self.list_len as usize * n);
+    }
+
+    fn append_default(&mut self) {
+        self.null_buffer_builder.append_non_null();
+        self.values_builder.append_defaults(self.list_len as usize);
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_non_nulls(n);
+        self.values_builder.append_defaults(self.list_len as usize * n);
     }
 }
 

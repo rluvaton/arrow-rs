@@ -93,20 +93,6 @@ impl BooleanBuilder {
         self.null_buffer_builder.append_non_null();
     }
 
-    /// Appends a null slot into the builder
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.null_buffer_builder.append_null();
-        self.values_builder.advance(1);
-    }
-
-    /// Appends `n` `null`s into the builder.
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_n_nulls(n);
-        self.values_builder.advance(n);
-    }
-
     /// Appends an `Option<T>` into the builder
     #[inline]
     pub fn append_option(&mut self, v: Option<bool>) {
@@ -218,6 +204,30 @@ impl ArrayBuilder for BooleanBuilder {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
+    }
+
+    /// Appends a null slot into the builder
+    #[inline]
+    fn append_null(&mut self) {
+        self.null_buffer_builder.append_null();
+        self.values_builder.advance(1);
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
+        self.values_builder.advance(n);
+    }
+
+    #[inline]
+    fn append_default(&mut self) {
+        self.append_value(false);
+    }
+
+    #[inline]
+    fn append_defaults(&mut self, n: usize) {
+        self.append_n(n, false);
     }
 
     /// Builds the array and reset this builder.

@@ -88,6 +88,7 @@ where
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
     map: HashMap<Value<V::Native>, usize>,
+
 }
 
 impl<K, V> Default for PrimitiveDictionaryBuilder<K, V>

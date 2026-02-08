@@ -335,6 +335,24 @@ pub trait ArrayBuilder: Any + Send + Sync {
         self.len() == 0
     }
 
+    /// Append null value to the builder.
+    #[inline]
+    fn append_null(&mut self) {
+        self.append_nulls(1)
+    }
+
+    /// Append n nulls to the builder
+    fn append_nulls(&mut self, n: usize);
+
+    /// Append default valid value to the array
+    /// this can be used by struct builders when the struct has null in place, but the field is not nullable so we don't want to set null
+    #[inline]
+    fn append_default(&mut self) {
+        self.append_defaults(1)
+    }
+
+    fn append_defaults(&mut self, n: usize);
+
     /// Builds the array
     fn finish(&mut self) -> ArrayRef;
 
@@ -366,6 +384,22 @@ impl ArrayBuilder for Box<dyn ArrayBuilder> {
 
     fn is_empty(&self) -> bool {
         (**self).is_empty()
+    }
+
+    fn append_null(&mut self) {
+        (**self).append_null()
+    }
+
+    fn append_nulls(&mut self, n: usize) {
+        (**self).append_nulls(n)
+    }
+
+    fn append_default(&mut self) {
+        (**self).append_default()
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        (**self).append_defaults(n)
     }
 
     fn finish(&mut self) -> ArrayRef {

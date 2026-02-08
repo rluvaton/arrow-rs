@@ -61,18 +61,6 @@ impl NullBuilder {
 
     /// Appends a null slot into the builder
     #[inline]
-    pub fn append_null(&mut self) {
-        self.len += 1;
-    }
-
-    /// Appends `n` `null`s into the builder.
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.len += n;
-    }
-
-    /// Appends a null slot into the builder
-    #[inline]
     pub fn append_empty_value(&mut self) {
         self.append_null();
     }
@@ -131,6 +119,28 @@ impl ArrayBuilder for NullBuilder {
     /// Builds the array without resetting the builder.
     fn finish_cloned(&self) -> ArrayRef {
         Arc::new(self.finish_cloned())
+    }
+
+    /// Appends a null slot into the builder
+    #[inline]
+    fn append_null(&mut self) {
+        self.len += 1;
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        self.len += n;
+    }
+
+    #[inline]
+    fn append_default(&mut self) {
+        self.append_empty_value()
+    }
+
+    #[inline]
+    fn append_defaults(&mut self, n: usize) {
+        self.append_empty_values(n)
     }
 }
 

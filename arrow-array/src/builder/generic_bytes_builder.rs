@@ -124,22 +124,6 @@ impl<T: ByteArrayType> GenericByteBuilder<T> {
         };
     }
 
-    /// Append a null value into the builder.
-    #[inline]
-    pub fn append_null(&mut self) {
-        self.null_buffer_builder.append(false);
-        self.offsets_builder.push(self.next_offset());
-    }
-
-    /// Appends `n` `null`s into the builder.
-    #[inline]
-    pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_n_nulls(n);
-        let next_offset = self.next_offset();
-        self.offsets_builder
-            .extend(std::iter::repeat_n(next_offset, n));
-    }
-
     /// Appends array values and null to this builder as is
     /// (this means that underlying null values are copied as is).
     #[inline]
@@ -253,6 +237,34 @@ impl<T: ByteArrayType> ArrayBuilder for GenericByteBuilder<T> {
     /// Returns the number of binary slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
+    }
+
+    /// Append a null value into the builder.
+    #[inline]
+    fn append_null(&mut self) {
+        self.null_buffer_builder.append(false);
+        self.offsets_builder.push(self.next_offset());
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
+        let next_offset = self.next_offset();
+        self.offsets_builder
+          .extend(std::iter::repeat_n(next_offset, n));
+    }
+
+    fn append_default(&mut self) {
+        self.null_buffer_builder.append(true);
+        self.offsets_builder.push(self.next_offset());
+    }
+
+    fn append_defaults(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_non_nulls(n);
+        let next_offset = self.next_offset();
+        self.offsets_builder
+          .extend(std::iter::repeat_n(next_offset, n));
     }
 
     /// Builds the array and reset this builder.
