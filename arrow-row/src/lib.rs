@@ -704,7 +704,12 @@ impl Codec {
                 };
 
                 // For Map type we unwrap the intermediate struct type to avoid going through Struct codec to improve performance
-                let fields = fields.iter().map(|struct_field| SortField::new_with_options(struct_field.data_type().clone(), options)).collect::<Vec<_>>();
+                let fields = fields
+                    .iter()
+                    .map(|struct_field| {
+                        SortField::new_with_options(struct_field.data_type().clone(), options)
+                    })
+                    .collect::<Vec<_>>();
                 assert_eq!(fields.len(), 2);
                 let converter = RowConverter::new(fields)?;
                 Ok(Self::Map(converter))
@@ -835,19 +840,18 @@ impl Codec {
                 let map_array = as_map_array(array);
 
                 let first_offset = map_array.offsets()[0] as usize;
-                let last_offset =
-                  map_array.offsets()[map_array.offsets().len() - 1] as usize;
+                let last_offset = map_array.offsets()[map_array.offsets().len() - 1] as usize;
 
                 // entries can include more data than referenced in the MapArray, only encode
                 // the referenced entries.
                 let sliced_entries = map_array
-                  .entries()
-                  .slice(first_offset, last_offset - first_offset);
+                    .entries()
+                    .slice(first_offset, last_offset - first_offset);
 
                 // the converter for the map is the keys and values and not the wrapping struct
                 let rows = converter.convert_columns(sliced_entries.columns())?;
                 Ok(Encoder::Map(rows))
-            },
+            }
             Codec::RunEndEncoded(converter) => {
                 let values = match array.data_type() {
                     DataType::RunEndEncoded(r, _) => match r.data_type() {
@@ -1842,7 +1846,9 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 ),
                 _ => unreachable!(),
             },
-            Encoder::Map(rows) => list::compute_lengths(tracker.materialized(), rows, as_map_array(array)),
+            Encoder::Map(rows) => {
+                list::compute_lengths(tracker.materialized(), rows, as_map_array(array))
+            }
             Encoder::RunEndEncoded(rows) => match array.data_type() {
                 DataType::RunEndEncoded(r, _) => match r.data_type() {
                     DataType::Int16 => run::compute_lengths(
@@ -2233,12 +2239,12 @@ unsafe fn decode_column(
             Arc::new(StructArray::from(unsafe { builder.build_unchecked() }))
         }
         Codec::List(converter) => match &field.data_type {
-            DataType::List(_) => {
-                Arc::new(unsafe { list::decode::<GenericListArray<i32>>(converter, rows, field, validate_utf8) }?)
-            }
-            DataType::LargeList(_) => {
-                Arc::new(unsafe { list::decode::<GenericListArray<i64>>(converter, rows, field, validate_utf8) }?)
-            }
+            DataType::List(_) => Arc::new(unsafe {
+                list::decode::<GenericListArray<i32>>(converter, rows, field, validate_utf8)
+            }?),
+            DataType::LargeList(_) => Arc::new(unsafe {
+                list::decode::<GenericListArray<i64>>(converter, rows, field, validate_utf8)
+            }?),
             DataType::ListView(_) => Arc::new(unsafe {
                 list::decode_list_view::<i32>(converter, rows, field, validate_utf8)
             }?),
@@ -2256,7 +2262,9 @@ unsafe fn decode_column(
             }?),
             _ => unreachable!(),
         },
-        Codec::Map(converter) => Arc::new(unsafe { list::decode::<MapArray>(converter, rows, field, validate_utf8) }?),
+        Codec::Map(converter) => {
+            Arc::new(unsafe { list::decode::<MapArray>(converter, rows, field, validate_utf8) }?)
+        }
         Codec::RunEndEncoded(converter) => match &field.data_type {
             DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
                 DataType::Int16 => Arc::new(unsafe {
@@ -4174,12 +4182,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
         assert_eq!(rows.row(3), rows.row(5)); // null = null (different masked values)
 
         let back = converter.convert_rows(&rows).unwrap();
@@ -4189,8 +4194,8 @@ mod tests {
 
         let sliced_map = map.slice(1, 5);
         let rows_on_sliced = converter
-          .convert_columns(&[Arc::clone(&sliced_map)])
-          .unwrap();
+            .convert_columns(&[Arc::clone(&sliced_map)])
+            .unwrap();
 
         let back = converter.convert_rows(&rows_on_sliced).unwrap();
         assert_eq!(back.len(), 1);
@@ -4245,12 +4250,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4259,8 +4261,8 @@ mod tests {
 
         let sliced_map = map.slice(1, 3);
         let rows_on_sliced = converter
-          .convert_columns(&[Arc::clone(&sliced_map)])
-          .unwrap();
+            .convert_columns(&[Arc::clone(&sliced_map)])
+            .unwrap();
 
         let back = converter.convert_rows(&rows_on_sliced).unwrap();
         assert_eq!(back.len(), 1);
@@ -4273,7 +4275,7 @@ mod tests {
         // Use `with_keys_field` on `MapBuilder` to set the keys are not nullable
         let key_field = Arc::new(Field::new("keys", DataType::Utf8, false));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
-          .with_keys_field(key_field);
+            .with_keys_field(key_field);
         // Entry 0: {"a": 1, "b": 2}
         builder.keys().append_value("a");
         builder.values().append_value(1);
@@ -4294,12 +4296,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4312,7 +4311,7 @@ mod tests {
         // Use `with_values_field` on `MapBuilder` to set the values are not nullable
         let value_field = Arc::new(Field::new("values", DataType::Int32, false));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
-          .with_values_field(value_field);
+            .with_values_field(value_field);
         // Entry 0: {"a": 1, "b": 2}
         builder.keys().append_value("a");
         builder.values().append_value(1);
@@ -4333,12 +4332,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4348,7 +4344,6 @@ mod tests {
 
     #[test]
     fn test_single_with_non_nullable_map_but_with_nullable_keys() {
-
         let keys = Arc::new(StringArray::from(vec![
             Some("a"),
             None,
@@ -4378,12 +4373,9 @@ mod tests {
         let map = Arc::new(MapArray::new(struct_field, offsets, entries, None, false)) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4396,7 +4388,7 @@ mod tests {
         // Map column is non-nullable, but values are nullable
         let value_field = Arc::new(Field::new("values", DataType::Int32, true));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
-          .with_values_field(value_field);
+            .with_values_field(value_field);
 
         // Entry 0: {"a": 1, "b": null}
         builder.keys().append_value("a");
@@ -4420,12 +4412,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4450,12 +4439,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         // All null rows should be equal
         assert_eq!(rows.row(0), rows.row(1));
@@ -4478,12 +4464,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         // All empty maps should be equal
         assert_eq!(rows.row(0), rows.row(1));
@@ -4502,12 +4485,9 @@ mod tests {
         let map = Arc::new(builder.finish_cloned()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4525,12 +4505,7 @@ mod tests {
             Some("d"),
         ])) as ArrayRef;
 
-        let values = Arc::new(Int32Array::from(vec![
-            Some(1),
-            Some(2),
-            None,
-            None,
-        ])) as ArrayRef;
+        let values = Arc::new(Int32Array::from(vec![Some(1), Some(2), None, None])) as ArrayRef;
 
         // Entry 0 = [0..2) -> {"a": 1, null: 2}
         // Entry 1 = [2..4) -> {"c": null, "d": null}
@@ -4550,12 +4525,9 @@ mod tests {
         let map = Arc::new(MapArray::new(struct_field, offsets, entries, None, false)) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4569,8 +4541,8 @@ mod tests {
         let key_field = Arc::new(Field::new("keys", DataType::Utf8, false));
         let value_field = Arc::new(Field::new("values", DataType::Int32, false));
         let mut builder = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new())
-          .with_keys_field(key_field)
-          .with_values_field(value_field);
+            .with_keys_field(key_field)
+            .with_values_field(value_field);
 
         // Entry 0: {"a": 1, "b": 2}
         builder.keys().append_value("a");
@@ -4592,12 +4564,9 @@ mod tests {
         let map = Arc::new(builder.finish()) as ArrayRef;
         let d = map.data_type().clone();
 
-        let converter =
-          RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
 
-        let rows = converter
-          .convert_columns(&[Arc::clone(&map)])
-          .unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -4621,10 +4590,8 @@ mod tests {
 
     #[derive(Clone, Copy)]
     enum GenerateAllUniqueNullBehavior {
-        AllowUpToSingleNull {
-            valid_percent: f64,
-        },
-        AllValid
+        AllowUpToSingleNull { valid_percent: f64 },
+        AllValid,
     }
 
     fn generate_all_unique_primitive_array<K>(
@@ -4633,39 +4600,37 @@ mod tests {
         null_behavior: GenerateAllUniqueNullBehavior,
     ) -> PrimitiveArray<K>
     where
-      K: ArrowPrimitiveType,
-      K::Native: Hash + Eq,
-      StandardUniform: Distribution<K::Native>,
+        K: ArrowPrimitiveType,
+        K::Native: Hash + Eq,
+        StandardUniform: Distribution<K::Native>,
     {
         let mut seen = std::collections::HashSet::new();
         (0..len)
-          .map(|_| {
-              let mut value;
+            .map(|_| {
+                let mut value;
 
-              loop {
-                  match null_behavior {
-                      GenerateAllUniqueNullBehavior::AllValid => {
-                          value = Some(rng.random());
-                      }
-                      GenerateAllUniqueNullBehavior::AllowUpToSingleNull {
-                          valid_percent,
-                      } => {
-                          value = if !seen.contains(&None) {
-                              rng.random_bool(valid_percent).then(|| rng.random())
-                          } else {
-                              Some(rng.random())
-                          };
-                      }
-                  }
+                loop {
+                    match null_behavior {
+                        GenerateAllUniqueNullBehavior::AllValid => {
+                            value = Some(rng.random());
+                        }
+                        GenerateAllUniqueNullBehavior::AllowUpToSingleNull { valid_percent } => {
+                            value = if !seen.contains(&None) {
+                                rng.random_bool(valid_percent).then(|| rng.random())
+                            } else {
+                                Some(rng.random())
+                            };
+                        }
+                    }
 
-                  if seen.insert(value) {
-                      break;
-                  }
-              }
+                    if seen.insert(value) {
+                        break;
+                    }
+                }
 
-              value
-          })
-          .collect()
+                value
+            })
+            .collect()
     }
 
     fn generate_boolean_array(
@@ -4883,8 +4848,8 @@ mod tests {
         gen_values: ValuesFn,
     ) -> MapArray
     where
-      KeysFn: FnOnce(&mut R, usize) -> ArrayRef,
-      ValuesFn: FnOnce(&mut R, usize) -> ArrayRef,
+        KeysFn: FnOnce(&mut R, usize) -> ArrayRef,
+        ValuesFn: FnOnce(&mut R, usize) -> ArrayRef,
     {
         let offsets = OffsetBuffer::<i32>::from_lengths((0..len).map(|_| rng.random_range(0..10)));
         let entries_len = offsets.last().unwrap().to_usize().unwrap();
@@ -4927,10 +4892,7 @@ mod tests {
     /// [1]: https://github.com/apache/arrow/blob/cbe2618431e413f12aa16aeba88b3a98914f194b/format/Schema.fbs#L124
     fn assert_valid_map(array: &MapArray) {
         let keys_arrow_row_converter =
-          RowConverter::new(vec![SortField::new(
-              array.key_type().clone(),
-          )])
-            .unwrap();
+            RowConverter::new(vec![SortField::new(array.key_type().clone())]).unwrap();
 
         array.iter().enumerate().flat_map(|(index, entry)| entry.map(|entry| (index, Arc::clone(entry.column(0))))).for_each(|(entry_index, keys)| {
             let keys_as_rows = keys_arrow_row_converter.convert_columns(&[Arc::clone(&keys)]).expect("should be able to convert keys");
@@ -5048,37 +5010,40 @@ mod tests {
 
     fn change_underline_null_values_for_map_array(array: &MapArray) -> MapArray {
         let (field, offsets, entries, nulls, ordered) = array.clone().into_parts();
-        assert!(!ordered, "can't replace underlying null values for ordered map array as this can violate the ordering");
+        assert!(
+            !ordered,
+            "can't replace underlying null values for ordered map array as this can violate the ordering"
+        );
 
         let (new_entries, new_offsets) = {
             let concat_values = offsets
-              .windows(2)
-              .zip(nulls.as_ref().unwrap().iter())
-              .map(|(start_and_end, is_valid)| {
-                  let start = start_and_end[0].as_usize();
-                  let end = start_and_end[1].as_usize();
-                  if is_valid {
-                      return (start, end - start);
-                  }
+                .windows(2)
+                .zip(nulls.as_ref().unwrap().iter())
+                .map(|(start_and_end, is_valid)| {
+                    let start = start_and_end[0].as_usize();
+                    let end = start_and_end[1].as_usize();
+                    if is_valid {
+                        return (start, end - start);
+                    }
 
-                  // If reached end, we take one less
-                  if end == entries.len() {
-                      (start, (end - start).saturating_sub(1))
-                  } else {
-                      // The keys may no longer be unique
-                      (start, end - start + 1)
-                  }
-              })
-              .map(|(start, length)| entries.slice(start, length))
-              .collect::<Vec<_>>();
+                    // If reached end, we take one less
+                    if end == entries.len() {
+                        (start, (end - start).saturating_sub(1))
+                    } else {
+                        // The keys may no longer be unique
+                        (start, end - start + 1)
+                    }
+                })
+                .map(|(start, length)| entries.slice(start, length))
+                .collect::<Vec<_>>();
 
             let new_offsets = OffsetBuffer::from_lengths(concat_values.iter().map(|s| s.len()));
 
             let new_values = {
                 let values = concat_values
-                  .iter()
-                  .map(|a| a as &dyn Array)
-                  .collect::<Vec<_>>();
+                    .iter()
+                    .map(|a| a as &dyn Array)
+                    .collect::<Vec<_>>();
                 arrow_select::concat::concat(&values).expect("should be able to concat")
             };
 
@@ -5208,9 +5173,11 @@ mod tests {
                 |rng, keys_len| {
                     // Need to generate all unique keys or make sure between each map every key is unique,
                     // so we generate up to a single null
-                    Arc::new(generate_all_unique_primitive_array::<Int64Type>(rng, keys_len, GenerateAllUniqueNullBehavior::AllowUpToSingleNull {
-                        valid_percent: 0.8
-                    }))
+                    Arc::new(generate_all_unique_primitive_array::<Int64Type>(
+                        rng,
+                        keys_len,
+                        GenerateAllUniqueNullBehavior::AllowUpToSingleNull { valid_percent: 0.8 },
+                    ))
                 },
                 |rng, values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.7)),
             )),
@@ -5220,7 +5187,11 @@ mod tests {
                 0.9,
                 |rng, keys_len| {
                     // Need to generate all unique keys or make sure between each map everything is unique
-                    Arc::new(generate_all_unique_primitive_array::<Int64Type>(rng, keys_len, GenerateAllUniqueNullBehavior::AllValid))
+                    Arc::new(generate_all_unique_primitive_array::<Int64Type>(
+                        rng,
+                        keys_len,
+                        GenerateAllUniqueNullBehavior::AllValid,
+                    ))
                 },
                 |rng, values_len| Arc::new(generate_strings::<i32>(rng, values_len, 0.7)),
             )),
@@ -6354,11 +6325,15 @@ mod tests {
         ));
         let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
 
-        let map: ArrayRef =
-            Arc::new(MapArray::new(struct_field.clone(), offsets, entries, None, false));
+        let map: ArrayRef = Arc::new(MapArray::new(
+            struct_field.clone(),
+            offsets,
+            entries,
+            None,
+            false,
+        ));
 
-        let converter =
-            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -6439,8 +6414,7 @@ mod tests {
         ));
         let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
 
-        let map: ArrayRef =
-            Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
+        let map: ArrayRef = Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
 
         let options = SortOptions::default().with_descending(true);
         let field = SortField::new_with_options(map.data_type().clone(), options);
@@ -6470,11 +6444,9 @@ mod tests {
         ));
         let entries = StructArray::new(entries_fields.into(), vec![null_keys, null_values], None);
 
-        let map: ArrayRef =
-            Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
+        let map: ArrayRef = Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
 
-        let converter =
-            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -6500,11 +6472,9 @@ mod tests {
         ));
         let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
 
-        let map: ArrayRef =
-            Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
+        let map: ArrayRef = Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
 
-        let converter =
-            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
 
         // All empty maps should be equal
@@ -6576,8 +6546,7 @@ mod tests {
             false,
         ));
 
-        let converter =
-            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -6621,8 +6590,7 @@ mod tests {
             None,
         ));
 
-        let converter =
-            RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(&list, &back[0]);
@@ -6664,8 +6632,7 @@ mod tests {
             false,
         ));
 
-        let converter =
-            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let converter = RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);

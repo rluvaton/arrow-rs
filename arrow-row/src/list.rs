@@ -16,13 +16,18 @@
 // under the License.
 
 use crate::{LengthTracker, RowConverter, Rows, SortField, fixed, null_sentinel};
-use arrow_array::{Array, FixedSizeListArray, GenericListArray, GenericListViewArray, OffsetSizeTrait, new_null_array, MapArray, ArrayRef, StructArray};
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_array::{
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, GenericListViewArray, MapArray,
+    OffsetSizeTrait, StructArray, new_null_array,
+};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Fields, SortOptions};
 use std::{ops::Range, sync::Arc};
 
-trait ListLike: Array {
+pub(crate) trait GenericListArrayOrMap: Array {
     type Offset: OffsetSizeTrait;
 
     fn offsets(&self) -> &[Self::Offset];
@@ -32,56 +37,69 @@ trait ListLike: Array {
         offsets: Vec<Self::Offset>,
         children: Vec<ArrayRef>,
         null_buffer: Option<NullBuffer>,
-    ) -> Self where Self: Sized;
+    ) -> Self
+    where
+        Self: Sized;
 }
 
-impl<O: OffsetSizeTrait> ListLike for GenericListArray<O> {
+impl<O: OffsetSizeTrait> GenericListArrayOrMap for GenericListArray<O> {
     type Offset = O;
 
     fn offsets(&self) -> &[Self::Offset] {
         self.value_offsets()
     }
 
-    unsafe fn from_parts_unchecked(data_type: DataType, offsets: Vec<Self::Offset>, children: Vec<ArrayRef>, null_buffer: Option<NullBuffer>) -> Self
+    unsafe fn from_parts_unchecked(
+        data_type: DataType,
+        offsets: Vec<Self::Offset>,
+        children: Vec<ArrayRef>,
+        null_buffer: Option<NullBuffer>,
+    ) -> Self
     where
-      Self: Sized,
+        Self: Sized,
     {
         let field = match data_type {
             DataType::List(inner_field) | DataType::LargeList(inner_field) => inner_field,
             _ => unreachable!(),
         };
 
-        let child = children.into_iter().next().expect("List arrays must have exactly one child array");
+        let child = children
+            .into_iter()
+            .next()
+            .expect("List arrays must have exactly one child array");
 
         // SAFETY: Caller must ensure offsets are valid and correctly correspond to the children and null buffer
         // the benefit here is to avoid validating that the offsets are monotonically increasing
         let offset_buffer = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
-        GenericListArray::<Self::Offset>::new(
-            field,
-            offset_buffer,
-            child,
-            null_buffer
-        )
+        GenericListArray::<Self::Offset>::new(field, offset_buffer, child, null_buffer)
     }
-
 }
 
-impl ListLike for MapArray {
+impl GenericListArrayOrMap for MapArray {
     type Offset = i32;
 
     fn offsets(&self) -> &[Self::Offset] {
         self.value_offsets()
     }
 
-    unsafe fn from_parts_unchecked(data_type: DataType, offsets: Vec<Self::Offset>, children: Vec<ArrayRef>, null_buffer: Option<NullBuffer>) -> Self
+    unsafe fn from_parts_unchecked(
+        data_type: DataType,
+        offsets: Vec<Self::Offset>,
+        children: Vec<ArrayRef>,
+        null_buffer: Option<NullBuffer>,
+    ) -> Self
     where
-      Self: Sized,
+        Self: Sized,
     {
         let DataType::Map(entries_field, ordered) = data_type else {
             unreachable!("data type must be Map for MapArray");
         };
 
-        assert_eq!(children.len(), 2, "Map arrays must have exactly two child arrays for keys and values");
+        assert_eq!(
+            children.len(),
+            2,
+            "Map arrays must have exactly two child arrays for keys and values"
+        );
 
         let DataType::Struct(fields) = entries_field.data_type() else {
             unreachable!("Map entry type must be Struct");
@@ -91,25 +109,18 @@ impl ListLike for MapArray {
             fields.clone(),
             children,
             // Entries StructArray cannot have NullBuffer since nulls are represented at the Map level
-            None
+            None,
         );
 
         // SAFETY: Caller must ensure offsets are valid and correctly correspond to the children and null buffer
         // the benefit here is to avoid validating that the offsets are monotonically increasing
         let offset_buffer = unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(offsets)) };
 
-        MapArray::new(
-            entries_field,
-            offset_buffer,
-            entries,
-            null_buffer,
-            ordered
-        )
+        MapArray::new(entries_field, offset_buffer, entries, null_buffer, ordered)
     }
-
 }
 
-pub fn compute_lengths<L: ListLike>(
+pub(crate) fn compute_lengths<L: GenericListArrayOrMap>(
     lengths: &mut [usize],
     rows: &Rows,
     array: &L,
@@ -128,10 +139,10 @@ pub fn compute_lengths<L: ListLike>(
         });
 }
 
-/// Encodes the provided [`ListLike`] to `out` with the provided `SortOptions`
+/// Encodes the provided [`GenericListArrayOrMap`] to `out` with the provided `SortOptions`
 ///
 /// `rows` should contain the encoded child elements
-pub fn encode<L: ListLike>(
+pub(crate) fn encode<L: GenericListArrayOrMap>(
     data: &mut [u8],
     offsets: &mut [usize],
     rows: &Rows,
@@ -181,7 +192,7 @@ fn encode_one(
 /// # Safety
 ///
 /// `rows` must contain valid data for the provided `converter`
-pub unsafe fn decode<ListLikeImpl: ListLike>(
+pub(crate) unsafe fn decode<ListLikeImpl: GenericListArrayOrMap>(
     converter: &RowConverter,
     rows: &mut [&[u8]],
     field: &SortField,
@@ -259,7 +270,6 @@ pub unsafe fn decode<ListLikeImpl: ListLike>(
 
     let children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
 
-
     // Since RowConverter flattens certain data types (i.e. Dictionary),
     // we need to use updated data type instead of original field
     let corrected_type = match &field.data_type {
@@ -267,20 +277,20 @@ pub unsafe fn decode<ListLikeImpl: ListLike>(
             assert_eq!(children.len(), 1);
             DataType::List(Arc::new(
                 inner_field
-                  .as_ref()
-                  .clone()
-                  .with_data_type(children[0].data_type().clone()),
+                    .as_ref()
+                    .clone()
+                    .with_data_type(children[0].data_type().clone()),
             ))
-        },
+        }
         DataType::LargeList(inner_field) => {
             assert_eq!(children.len(), 1);
             DataType::LargeList(Arc::new(
                 inner_field
-                  .as_ref()
-                  .clone()
-                  .with_data_type(children[0].data_type().clone()),
+                    .as_ref()
+                    .clone()
+                    .with_data_type(children[0].data_type().clone()),
             ))
-        },
+        }
         DataType::Map(inner_field, ordered) => {
             let DataType::Struct(entries_field) = inner_field.data_type() else {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -288,25 +298,32 @@ pub unsafe fn decode<ListLikeImpl: ListLike>(
                     inner_field.data_type()
                 )));
             };
-            assert_eq!(children.len(), 2, "Map arrays must have exactly two child arrays for keys and values");
+            assert_eq!(
+                children.len(),
+                2,
+                "Map arrays must have exactly two child arrays for keys and values"
+            );
             let key_field = entries_field[0]
-              .as_ref()
-              .clone()
-              .with_data_type(children[0].data_type().clone());
+                .as_ref()
+                .clone()
+                .with_data_type(children[0].data_type().clone());
             let value_field = entries_field[1]
-              .as_ref()
-              .clone()
-              .with_data_type(children[1].data_type().clone());
+                .as_ref()
+                .clone()
+                .with_data_type(children[1].data_type().clone());
 
             let entries_fields = Fields::from(vec![key_field, value_field]);
 
-            DataType::Map(Arc::new(
-                inner_field
-                  .as_ref()
-                  .clone()
-                  .with_data_type(DataType::Struct(entries_fields)),
-            ), *ordered)
-        },
+            DataType::Map(
+                Arc::new(
+                    inner_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(DataType::Struct(entries_fields)),
+                ),
+                *ordered,
+            )
+        }
         _ => unreachable!(),
     };
 
