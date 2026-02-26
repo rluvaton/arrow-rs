@@ -379,50 +379,6 @@ mod variable;
 ///
 /// With `[]` represented by an empty byte array, and `null` a null byte array.
 ///
-/// ## Map Encoding
-///
-/// Maps are encoded by first encoding all entries to the row format.
-///
-/// the Map encoding is very similar with the only difference being that the child elements are key-value pairs
-///
-/// A list value is then encoded as the concatenation of each of the child elements,
-/// separately encoded using the variable length encoding described above, followed
-/// by the variable length encoding of an empty byte array.
-///
-/// For example given:
-///
-/// ```text
-/// [1_u8, 2_u8, 3_u8]
-/// [1_u8, null]
-/// []
-/// null
-/// ```
-///
-/// The elements would be converted to:
-///
-/// ```text
-///     ┌──┬──┐     ┌──┬──┐     ┌──┬──┐     ┌──┬──┐        ┌──┬──┐
-///  1  │01│01│  2  │01│02│  3  │01│03│  1  │01│01│  null  │00│00│
-///     └──┴──┘     └──┴──┘     └──┴──┘     └──┴──┘        └──┴──┘
-///```
-///
-/// Which would be encoded as
-///
-/// ```text
-///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-///  [1_u8, 2_u8, 3_u8]     │02│01│01│00│00│02│02│01│02│00│00│02│02│01│03│00│00│02│01│
-///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
-///                          └──── 1_u8 ────┘   └──── 2_u8 ────┘  └──── 3_u8 ────┘
-///
-///                         ┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
-///  [1_u8, null]           │02│01│01│00│00│02│02│00│00│00│00│02│01│
-///                         └──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
-///                          └──── 1_u8 ────┘   └──── null ────┘
-///
-///```
-///
-/// With `[]` represented by an empty byte array, and `null` a null byte array.
-///
 /// ## Fixed Size List Encoding
 ///
 /// Fixed Size Lists are encoded by first encoding all child elements to the row format.
