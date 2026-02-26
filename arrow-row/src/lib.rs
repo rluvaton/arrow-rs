@@ -6335,33 +6335,341 @@ mod tests {
         assert_eq!(&outer_struct, &back[0]);
     }
 
-    // Test Map<Null> - verify it's not supported (as per current implementation)
-    // https://github.com/apache/arrow-rs/issues/7879
+    // Test Map<Utf8, Null> with various combinations of nulls and empty maps
     #[test]
-    fn test_map_null_not_supported() {
-        // Map with Null values
-        let map_data_type = Field::new_map(
-            "map",
-            "entries",
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Null, true),
-            false,
-            true,
-        )
-        .data_type()
-        .clone();
+    fn test_map_null_variations() {
+        // Map with Null values: [{a: NULL}, {}, {b: NULL, c: NULL}]
+        let keys = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
 
-        // Currently Map is not supported by RowConverter
-        let result = RowConverter::new(vec![SortField::new(map_data_type)]);
-        assert!(
-            result.is_err(),
-            "Map should not be supported by RowConverter"
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
+
+        let map: ArrayRef =
+            Arc::new(MapArray::new(struct_field.clone(), offsets, entries, None, false));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
+
+        // Map with Null values and null map entries: [{a: NULL}, null, {b: NULL, c: NULL}]
+        let keys = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
+
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
+
+        let map: ArrayRef = Arc::new(MapArray::new(
+            struct_field.clone(),
+            offsets,
+            entries,
+            Some(vec![true, false, true].into()),
+            false,
+        ));
+
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
+
+        // Empty map array with Null value type
+        let keys = Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef;
+        let null_values = Arc::new(NullArray::new(0)) as ArrayRef;
+
+        let offsets = OffsetBuffer::new(vec![0i32].into());
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
+
+        let map: ArrayRef = Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
+
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
+    }
+
+    // Test Map<Utf8, Null> with descending order
+    #[test]
+    fn test_map_null_descending() {
+        // [{a: NULL}, {}, {b: NULL, c: NULL}]
+        let keys = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
+
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
+
+        let map: ArrayRef =
+            Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
+
+        let options = SortOptions::default().with_descending(true);
+        let field = SortField::new_with_options(map.data_type().clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
+    }
+
+    // Test Map<Null, Null> - both keys and values are Null type
+    #[test]
+    fn test_map_null_keys_and_null_values() {
+        let null_keys = Arc::new(NullArray::new(3)) as ArrayRef;
+        let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
+
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Null, true)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![null_keys, null_values], None);
+
+        let map: ArrayRef =
+            Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
+    }
+
+    // Test Map<Utf8, Null> all empty maps
+    #[test]
+    fn test_map_null_all_empty() {
+        let keys = Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef;
+        let null_values = Arc::new(NullArray::new(0)) as ArrayRef;
+
+        let offsets = OffsetBuffer::new(vec![0, 0, 0, 0].into());
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
+
+        let map: ArrayRef =
+            Arc::new(MapArray::new(struct_field, offsets, entries, None, false));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+
+        // All empty maps should be equal
+        assert_eq!(rows.row(0), rows.row(1));
+        assert_eq!(rows.row(1), rows.row(2));
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
+    }
+
+    // Test Map<Utf8, Map<Utf8, Null>> - nested map with Null leaf values
+    #[test]
+    fn test_nested_map_null() {
+        // Inner map entries: {a: NULL, b: NULL, c: NULL}
+        let inner_keys = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let inner_null_values = Arc::new(NullArray::new(3)) as ArrayRef;
+
+        let inner_entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let inner_struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(inner_entries_fields.clone().into()),
+            false,
+        ));
+        let inner_entries = StructArray::new(
+            inner_entries_fields.clone().into(),
+            vec![inner_keys, inner_null_values],
+            None,
         );
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("not yet implemented")
+
+        // Inner maps: [{a: NULL}, {b: NULL, c: NULL}]
+        let inner_map = Arc::new(MapArray::new(
+            inner_struct_field.clone(),
+            OffsetBuffer::new(vec![0, 1, 3].into()),
+            inner_entries,
+            None,
+            false,
+        )) as ArrayRef;
+
+        // Outer map entries
+        let outer_keys = Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef;
+
+        let inner_map_type = DataType::Map(inner_struct_field.clone(), false);
+        let outer_entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", inner_map_type, true)),
+        ];
+        let outer_struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(outer_entries_fields.clone().into()),
+            false,
+        ));
+        let outer_entries = StructArray::new(
+            outer_entries_fields.into(),
+            vec![outer_keys, inner_map],
+            None,
         );
+
+        // Outer map: [{x: {a: NULL}}, {y: {b: NULL, c: NULL}}]
+        let map: ArrayRef = Arc::new(MapArray::new(
+            outer_struct_field,
+            OffsetBuffer::new(vec![0, 1, 2].into()),
+            outer_entries,
+            None,
+            false,
+        ));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
+    }
+
+    // Test List<Map<Utf8, Null>> - list containing maps with Null values
+    #[test]
+    fn test_list_of_map_null() {
+        // Map entries: {a: NULL, b: NULL, c: NULL}
+        let keys = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let null_values = Arc::new(NullArray::new(3)) as ArrayRef;
+
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", DataType::Null, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![keys, null_values], None);
+
+        // Maps: [{a: NULL}, {}, {b: NULL, c: NULL}]
+        let map_array = Arc::new(MapArray::new(
+            struct_field.clone(),
+            OffsetBuffer::new(vec![0, 1, 1, 3].into()),
+            entries,
+            None,
+            false,
+        )) as ArrayRef;
+
+        let map_type = DataType::Map(struct_field, false);
+        // List of maps: [[{a: NULL}], [{}, {b: NULL, c: NULL}]]
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(map_type, true)),
+            OffsetBuffer::new(vec![0, 1, 3].into()),
+            map_array,
+            None,
+        ));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(list.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(&list, &back[0]);
+    }
+
+    // Test Map<Utf8, List<Null>> - map with list values containing Null
+    #[test]
+    fn test_map_of_list_null() {
+        // Inner list values: [NULL, NULL, NULL]
+        let null_array = Arc::new(NullArray::new(3)) as ArrayRef;
+        // Lists: [[NULL], [], [NULL, NULL]]
+        let list_array = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Null, true)),
+            OffsetBuffer::from_lengths(vec![1, 0, 2]),
+            null_array,
+            None,
+        )) as ArrayRef;
+
+        let keys = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+
+        let list_type = list_array.data_type().clone();
+        let entries_fields = vec![
+            Arc::new(Field::new("keys", DataType::Utf8, false)),
+            Arc::new(Field::new("values", list_type, true)),
+        ];
+        let struct_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(entries_fields.clone().into()),
+            false,
+        ));
+        let entries = StructArray::new(entries_fields.into(), vec![keys, list_array], None);
+
+        // Map: [{a: [NULL], b: [], c: [NULL, NULL]}]
+        let map: ArrayRef = Arc::new(MapArray::new(
+            struct_field,
+            OffsetBuffer::new(vec![0, 3].into()),
+            entries,
+            None,
+            false,
+        ));
+
+        let converter =
+            RowConverter::new(vec![SortField::new(map.data_type().clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&map)]).unwrap();
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+        assert_eq!(&map, &back[0]);
     }
 }
