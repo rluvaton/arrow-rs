@@ -1719,6 +1719,13 @@ impl<R: Read + Seek> FileReader<R> {
         self.decoder = unsafe { self.decoder.with_skip_validation(skip_validation) };
         self
     }
+
+    /// Set how buffers backing the decoded arrays are allocated (defaults to
+    /// [`BufferAllocationStrategy::Shared`]).
+    pub fn with_buffer_allocation_strategy(mut self, strategy: BufferAllocationStrategy) -> Self {
+        self.decoder = self.decoder.with_buffer_allocation_strategy(strategy);
+        self
+    }
 }
 
 impl<R: Read + Seek> Iterator for FileReader<R> {
