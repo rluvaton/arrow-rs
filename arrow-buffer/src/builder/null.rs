@@ -61,6 +61,14 @@ pub struct NullBufferBuilder {
     len: usize,
     /// Initial capacity of the `bitmap_builder`, when it is materialized.
     capacity: usize,
+
+    /// The amount of unset bits in the bitmap builder
+    null_count: usize,
+
+    /// Whether the null count actually reflect the amount of unset bits
+    ///
+    /// We have bool and count instead of Option<usize> to avoid the extra cost of checking if Some before adding to null count
+    can_trust_null_count: bool,
 }
 
 impl NullBufferBuilder {
@@ -74,6 +82,8 @@ impl NullBufferBuilder {
             bitmap_builder: None,
             len: 0,
             capacity,
+            null_count: 0,
+            can_trust_null_count: true,
         }
     }
 
@@ -83,6 +93,8 @@ impl NullBufferBuilder {
             bitmap_builder: None,
             len,
             capacity: len,
+            null_count: 0,
+            can_trust_null_count: true,
         }
     }
 
@@ -96,10 +108,15 @@ impl NullBufferBuilder {
         assert!(len <= capacity);
 
         let bitmap_builder = Some(BooleanBufferBuilder::new_from_buffer(buffer, len));
+
         Self {
             bitmap_builder,
             len,
             capacity,
+
+            // Not counting nulls to avoid overhead and extra cost if it will be overridden later
+            null_count: 0,
+            can_trust_null_count: false,
         }
     }
 
@@ -131,6 +148,7 @@ impl NullBufferBuilder {
     pub fn append_n_nulls(&mut self, n: usize) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        self.null_count += n;
     }
 
     /// Appends a `false` into the builder
@@ -139,6 +157,7 @@ impl NullBufferBuilder {
     pub fn append_null(&mut self) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append(false);
+        self.null_count += 1;
     }
 
     /// Appends a boolean value into the builder.
@@ -159,6 +178,9 @@ impl NullBufferBuilder {
     #[inline]
     pub fn set_bit(&mut self, index: usize, v: bool) {
         self.materialize_if_needed();
+
+        // Not trusting null count anymore instead of checking if it was null before to avoid the cost
+        self.mark_null_count_dirty();
         self.bitmap_builder.as_mut().unwrap().set_bit(index, v);
     }
 
@@ -182,7 +204,16 @@ impl NullBufferBuilder {
     /// If `len` is greater than the buffer's current length, this has no effect
     #[inline]
     pub fn truncate(&mut self, len: usize) {
+        if len == 0 {
+            self.can_trust_null_count = true;
+            self.null_count = 0;
+        }
         if let Some(buf) = self.bitmap_builder.as_mut() {
+            // If there were nulls we can't trust it since we don't want to count the nulls that were removed
+            // but only do that if we are actually truncating
+            if self.null_count > 0 && len < buf.len() {
+                self.mark_null_count_dirty();
+            }
             buf.truncate(len);
         } else if len <= self.len {
             self.len = len
@@ -193,7 +224,11 @@ impl NullBufferBuilder {
     /// to indicate the validations of these items.
     pub fn append_slice(&mut self, slice: &[bool]) {
         if slice.iter().any(|v| !v) {
-            self.materialize_if_needed()
+            self.materialize_if_needed();
+
+            // Don't trust the null count so we can avoid iterating over the slice
+            // which might be a small slice and can be slower than counting the nulls using bit count instructions
+            self.mark_null_count_dirty();
         }
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_slice(slice)
@@ -209,6 +244,7 @@ impl NullBufferBuilder {
         if buffer.null_count() > 0 {
             self.materialize_if_needed();
         }
+        self.null_count += buffer.null_count();
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_buffer(buffer.inner())
         } else {
@@ -222,20 +258,57 @@ impl NullBufferBuilder {
     /// when you don't need to reuse this builder.
     pub fn finish(&mut self) -> Option<NullBuffer> {
         self.len = 0;
-        Some(NullBuffer::new(self.bitmap_builder.take()?.build()))
+        let null_count = Some(self.null_count).filter(|| self.can_trust_null_count);
+        self.null_count = 0;
+        self.can_trust_null_count = true;
+
+        let boolean_buffer = self.bitmap_builder.take()?.build();
+        if null_count == Some(0) {
+            return None;
+        }
+
+        if let Some(null_count) = null_count {
+            // SAFETY: Null count is correct as we count it while inserting
+            Some(unsafe { NullBuffer::new_unchecked(boolean_buffer, null_count) }))
+        } else {
+            Some(NullBuffer::new(boolean_buffer)).filter(|b| b.null_count() > 0)
+        }
     }
 
     /// Builds the [`NullBuffer`] without resetting the builder.
     ///
     /// This consumes the builder. Use [`Self::finish`] to reuse it.
     pub fn build(self) -> Option<NullBuffer> {
-        self.bitmap_builder.map(NullBuffer::from)
+        let null_count = Some(self.null_count).filter(|| self.can_trust_null_count);
+
+        if null_count == Some(0) {
+            return None;
+        }
+
+        let boolean_buffer = self.bitmap_builder?.build();
+        if let Some(null_count) = null_count {
+            // SAFETY: Null count is correct as we count it while inserting
+            Some(unsafe { NullBuffer::new_unchecked(boolean_buffer, null_count) })
+        } else {
+            Some(NullBuffer::new(boolean_buffer)).filter(|b| b.null_count() > 0)
+        }
     }
 
     /// Builds the [NullBuffer] without resetting the builder.
     pub fn finish_cloned(&self) -> Option<NullBuffer> {
-        let buffer = self.bitmap_builder.as_ref()?.finish_cloned();
-        Some(NullBuffer::new(buffer))
+        let null_count = Some(self.null_count).filter(|| self.can_trust_null_count);
+
+        if null_count == Some(0) {
+            return None;
+        }
+
+        let boolean_buffer = self.bitmap_builder?.finish_cloned();
+        if let Some(null_count) = null_count {
+            // SAFETY: Null count is correct as we count it while inserting
+            Some(unsafe { NullBuffer::new_unchecked(boolean_buffer, null_count) })
+        } else {
+            Some(NullBuffer::new(boolean_buffer)).filter(|b| b.null_count() > 0)
+        }
     }
 
     /// Returns the inner bitmap builder as slice
@@ -260,7 +333,18 @@ impl NullBufferBuilder {
 
     /// Return a mutable reference to the inner bitmap slice.
     pub fn as_slice_mut(&mut self) -> Option<&mut [u8]> {
+        if self.bitmap_builder.is_some() {
+            self.mark_null_count_dirty();
+        }
         self.bitmap_builder.as_mut().map(|b| b.as_slice_mut())
+    }
+
+    fn mark_null_count_dirty(&mut self) {
+        self.can_trust_null_count = false;
+
+        // Set to 0 to avoid potential overflow
+        // (appending (usize::MAX / 2) nulls, calling truncate and then appending (usize::MAX - 1) nulls
+        self.null_count = 0;
     }
 
     /// Return the allocated size of this builder, in bytes, useful for memory accounting.
