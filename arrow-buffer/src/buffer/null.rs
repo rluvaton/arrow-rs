@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::bit_util::unset_bit;
 use crate::buffer::BooleanBuffer;
 use crate::{Buffer, MutableBuffer, OverflowError};
 
@@ -60,6 +61,31 @@ impl NullBuffer {
             buffer: BooleanBuffer::new_set(len),
             null_count: 0,
         }
+    }
+
+    /// Create a new [`NullBuffer`] with length `len` where all values are valid
+    /// except 1 in the provided `null_position`
+    ///
+    /// # Panics
+    /// - if `len == 0`
+    /// - if `null_position >= len`
+    pub fn new_single(len: usize, null_position: usize) -> Self {
+        assert_ne!(len, 0, "length must be greater than 0");
+        assert!(
+            null_position < len,
+            "null position ({null_position}) out of range (0..{len})"
+        );
+
+        let mut data = MutableBuffer::from(vec![u64::MAX; len.div_ceil(64)]);
+
+        unset_bit(data.as_slice_mut(), null_position);
+
+        let buffer: Buffer = data.into();
+
+        let buffer = BooleanBuffer::new(buffer, 0, len);
+
+        // SAFETY: this is safe as we just marked single item as null
+        unsafe { NullBuffer::new_unchecked(buffer, 1) }
     }
 
     /// Create a new [`NullBuffer`] with the provided `buffer` and `null_count`
@@ -548,5 +574,35 @@ mod tests {
             assert!((count..2 * count).all(|i| expanded.is_null(i)));
             assert!((2 * count..3 * count).all(|i| expanded.is_valid(i)));
         }
+    }
+
+    #[test]
+    fn test_new_single() {
+        for (len, pos) in [(1, 0), (64, 63), (65, 63), (29, 7)] {
+            let mut expected = vec![true; len];
+            expected[pos] = false;
+            let expected = NullBuffer::from(expected.as_slice());
+            let null_buffer = NullBuffer::new_single(len, pos);
+
+            assert_eq!(null_buffer, expected);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "length must be greater than 0")]
+    fn test_new_single_should_panic_on_len_0() {
+        NullBuffer::new_single(0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "null position (2) out of range (0..2)")]
+    fn test_new_single_should_panic_on_null_pos_eq_len() {
+        NullBuffer::new_single(2, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "null position (5) out of range (0..2)")]
+    fn test_new_single_should_panic_on_null_pos_gt_len() {
+        NullBuffer::new_single(2, 5);
     }
 }
