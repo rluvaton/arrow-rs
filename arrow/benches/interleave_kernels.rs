@@ -220,6 +220,54 @@ fn add_benchmark(c: &mut Criterion) {
             &[&dict, &sparse_dict],
         );
     }
+
+    bench_many_arrays_random(c);
+}
+
+/// Interleave 8192 rows from 100 string arrays of 8192 rows each, picking a
+/// random array for every output row, with row indices increasing per array
+fn bench_many_arrays_random(c: &mut Criterion) {
+    const NUM_ARRAYS: usize = 100;
+    const ARRAY_LEN: usize = 8192;
+    const OUTPUT_LEN: usize = 8192;
+
+    let arrays: Vec<StringArray> = (0..NUM_ARRAYS)
+        .map(|i| {
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                ARRAY_LEN, 0.0, 0, 40, "", i as u64,
+            )
+        })
+        .collect();
+    let values: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+
+    let mut rng = seedable_rng();
+
+    // Pick a random array for every output row
+    let array_indices: Vec<usize> = (0..OUTPUT_LEN)
+        .map(|_| rng.random_range(0..NUM_ARRAYS))
+        .collect();
+
+    // For each array, pick sorted random row indices for the rows taken from it
+    let mut rows_per_array: Vec<std::vec::IntoIter<usize>> = (0..NUM_ARRAYS)
+        .map(|array_idx| {
+            let count = array_indices.iter().filter(|&&a| a == array_idx).count();
+            let mut rows: Vec<usize> = (0..count).map(|_| rng.random_range(0..ARRAY_LEN)).collect();
+            rows.sort_unstable();
+            rows.into_iter()
+        })
+        .collect();
+
+    let indices: Vec<(usize, usize)> = array_indices
+        .into_iter()
+        .map(|array_idx| (array_idx, rows_per_array[array_idx].next().unwrap()))
+        .collect();
+
+    c.bench_function(
+        &format!(
+            "interleave str(0..=40, 0.0) {OUTPUT_LEN} from {NUM_ARRAYS} arrays of {ARRAY_LEN} random"
+        ),
+        |b| b.iter(|| hint::black_box(interleave(&values, &indices).unwrap())),
+    );
 }
 
 criterion_group!(benches, add_benchmark);
