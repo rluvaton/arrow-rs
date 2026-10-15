@@ -261,15 +261,18 @@ fn interleave_bytes<T: ByteArrayType>(
 fn interleave_bytes_offsets<T: ByteArrayType>(indices: &[(usize, usize)], arrays: &[&GenericByteArray<T>]) -> Result<(usize, Vec<<T as ByteArrayType>::Offset>), ArrowError> {
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
-    offsets.push(T::Offset::from_usize(0).unwrap());
-    for (a, b) in indices {
+    // SAFETY: offsets is allocated with capacity indices.len() + 1, so this is safe
+    //         and it implement copy so no mem leak in case of panic
+    unsafe {
+        offsets.set_len(indices.len() + 1);
+    }
+    offsets[0] = T::Offset::from_usize(0).unwrap();
+    for (index, (a, b)) in indices.iter().enumerate() {
         let o = arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
-        offsets.push(
-            T::Offset::from_usize(capacity)
-              .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
-        );
+        offsets[index + 1] = T::Offset::from_usize(capacity)
+              .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
     }
     Ok((capacity, offsets))
 }
