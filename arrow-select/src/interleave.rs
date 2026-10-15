@@ -33,6 +33,7 @@ use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
 use std::collections::BTreeMap;
+use std::ptr;
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -259,20 +260,24 @@ fn interleave_bytes<T: ByteArrayType>(
 
     let mut values = Vec::<u8>::with_capacity(capacity);
     {
-        // SAFETY: we are about to initialize all `capacity` elements of `values`, so it is safe to set the length to `capacity`
-        //  and the type is u8 so premature drop does not leak memory
-        unsafe {
-            values.set_len(capacity);
-        }
-        let mut values_to_set = values.as_mut_slice();
-
+        let mut dest = values.as_mut_ptr();
         for (a, b) in indices {
             let value = interleaved.arrays[*a].value(*b);
             let bytes : &[u8] = value.as_ref();
-            // SAFETY: values_to_set is valid for writes of bytes.len()
-            let (dest, rest) = unsafe {values_to_set.split_at_mut_unchecked(bytes.len()) };
-            dest.copy_from_slice(bytes);
-            values_to_set = rest;
+            // SAFETY: dest is valid for writes of bytes.len() and does not overlap with bytes.as_ptr()
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
+            }
+
+            // SAFETY: dest is valid for writes of bytes.len() and does not overlap with bytes.as_ptr()
+            dest = unsafe {
+                dest.add(bytes.len())
+            };
+        }
+
+        // SAFETY: all `capacity` elements have been initialized
+        unsafe {
+            values.set_len(capacity);
         }
     }
 
