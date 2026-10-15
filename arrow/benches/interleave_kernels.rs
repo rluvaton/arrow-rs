@@ -21,7 +21,9 @@ extern crate criterion;
 use criterion::Criterion;
 use std::ops::Range;
 
-use rand::RngExt;
+use rand::distr::Alphanumeric;
+use rand::prelude::StdRng;
+use rand::{RngExt, SeedableRng};
 
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
@@ -221,53 +223,297 @@ fn add_benchmark(c: &mut Criterion) {
         );
     }
 
-    bench_many_arrays_random(c);
+    bench_interleave_strings(c);
 }
 
-/// Interleave 8192 rows from 100 string arrays of 8192 rows each, picking a
-/// random array for every output row, with row indices increasing per array
-fn bench_many_arrays_random(c: &mut Criterion) {
-    const NUM_ARRAYS: usize = 100;
+/// How the `(array, row)` indices passed to `interleave` are generated
+#[derive(Clone, Copy)]
+enum IndexProfile {
+    /// Random array and random row for every output row
+    Random,
+    /// Random array for every output row, with row indices increasing per array
+    /// (e.g. merging sorted streams)
+    RandomArrayIncreasingRows,
+    /// Runs of consecutive rows from a random array, starting at a random row
+    Runs(usize),
+    /// Random rows all taken from the first array (like `take`)
+    SingleArray,
+    /// Only a few distinct `(array, row)` pairs, each repeated many times
+    /// (e.g. a join with skewed keys)
+    FewDistinct(usize),
+}
+
+impl IndexProfile {
+    fn name(&self) -> String {
+        match self {
+            Self::Random => "random".to_string(),
+            Self::RandomArrayIncreasingRows => "random_array_increasing_rows".to_string(),
+            Self::Runs(len) => format!("runs({len})"),
+            Self::SingleArray => "single_array".to_string(),
+            Self::FewDistinct(n) => format!("few_distinct({n})"),
+        }
+    }
+
+    fn generate(
+        &self,
+        rng: &mut impl RngExt,
+        num_arrays: usize,
+        array_len: usize,
+        output_len: usize,
+    ) -> Vec<(usize, usize)> {
+        match *self {
+            Self::Random => (0..output_len)
+                .map(|_| {
+                    (
+                        rng.random_range(0..num_arrays),
+                        rng.random_range(0..array_len),
+                    )
+                })
+                .collect(),
+            Self::RandomArrayIncreasingRows => {
+                let array_indices: Vec<usize> = (0..output_len)
+                    .map(|_| rng.random_range(0..num_arrays))
+                    .collect();
+
+                // For each array, pick sorted random row indices for the rows taken from it
+                let mut rows_per_array: Vec<std::vec::IntoIter<usize>> = (0..num_arrays)
+                    .map(|array_idx| {
+                        let count = array_indices.iter().filter(|&&a| a == array_idx).count();
+                        let mut rows: Vec<usize> =
+                            (0..count).map(|_| rng.random_range(0..array_len)).collect();
+                        rows.sort_unstable();
+                        rows.into_iter()
+                    })
+                    .collect();
+
+                array_indices
+                    .into_iter()
+                    .map(|array_idx| (array_idx, rows_per_array[array_idx].next().unwrap()))
+                    .collect()
+            }
+            Self::Runs(run_len) => {
+                let mut indices = Vec::with_capacity(output_len);
+                while indices.len() < output_len {
+                    let array_idx = rng.random_range(0..num_arrays);
+                    let start = rng.random_range(0..=array_len - run_len);
+                    let len = run_len.min(output_len - indices.len());
+                    indices.extend((start..start + len).map(|row| (array_idx, row)));
+                }
+                indices
+            }
+            Self::SingleArray => (0..output_len)
+                .map(|_| (0, rng.random_range(0..array_len)))
+                .collect(),
+            Self::FewDistinct(n) => {
+                let distinct: Vec<(usize, usize)> = (0..n)
+                    .map(|_| {
+                        (
+                            rng.random_range(0..num_arrays),
+                            rng.random_range(0..array_len),
+                        )
+                    })
+                    .collect();
+                (0..output_len)
+                    .map(|_| distinct[rng.random_range(0..n)])
+                    .collect()
+            }
+        }
+    }
+}
+
+/// Distribution of string lengths, as real world data is rarely uniformly distributed
+#[derive(Clone, Copy)]
+enum StrLen {
+    /// Every string has the same length (e.g. UUIDs, hashes, fixed width codes)
+    Fixed(usize),
+    /// Log-normal lengths around `median`, most real world text columns
+    /// (names, words, URLs) have a right skewed length distribution like this
+    LogNormal { median: f64, sigma: f64 },
+    /// Pick one of the distributions with the given weight
+    Mixture(&'static [(f64, StrLen)]),
+}
+
+impl StrLen {
+    fn sample(&self, rng: &mut impl RngExt) -> usize {
+        match *self {
+            Self::Fixed(len) => len,
+            Self::LogNormal { median, sigma } => {
+                // Box-Muller transform to get a standard normal sample
+                let u1: f64 = 1.0 - rng.random::<f64>();
+                let u2: f64 = rng.random::<f64>();
+                let z = (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos();
+                ((median * (sigma * z).exp()).round() as usize).min(4096)
+            }
+            Self::Mixture(parts) => {
+                let total: f64 = parts.iter().map(|(w, _)| w).sum();
+                let mut pick = rng.random::<f64>() * total;
+                for (weight, len) in parts {
+                    if pick < *weight {
+                        return len.sample(rng);
+                    }
+                    pick -= weight;
+                }
+                parts.last().unwrap().1.sample(rng)
+            }
+        }
+    }
+}
+
+/// Creates a string array whose lengths follow `str_len`
+fn create_string_array_with_str_len<O: OffsetSizeTrait>(
+    len: usize,
+    null_density: f32,
+    str_len: StrLen,
+    seed: u64,
+) -> GenericStringArray<O> {
+    let rng = &mut StdRng::seed_from_u64(seed);
+    (0..len)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let len = str_len.sample(rng);
+                Some(
+                    rng.sample_iter(&Alphanumeric)
+                        .take(len)
+                        .map(char::from)
+                        .collect::<String>(),
+                )
+            }
+        })
+        .collect()
+}
+
+/// Short words, codes or names: mostly 5-20 characters
+const NAMES: StrLen = StrLen::LogNormal {
+    median: 10.0,
+    sigma: 0.5,
+};
+
+/// Interleave strings from many arrays with different string lengths, null
+/// densities, offset sizes and index profiles
+fn bench_interleave_strings(c: &mut Criterion) {
     const ARRAY_LEN: usize = 8192;
     const OUTPUT_LEN: usize = 8192;
+    const NUM_ARRAYS: usize = 100;
 
-    let arrays: Vec<StringArray> = (0..NUM_ARRAYS)
-        .map(|i| {
-            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-                ARRAY_LEN, 0.0, 0, 40, "", i as u64,
-            )
-        })
-        .collect();
-    let values: Vec<&dyn Array> = arrays.iter().map(|a| a as &dyn Array).collect();
+    fn create_arrays<O: OffsetSizeTrait>(
+        num_arrays: usize,
+        null_density: f32,
+        str_len: StrLen,
+    ) -> Vec<ArrayRef> {
+        (0..num_arrays)
+            .map(|i| {
+                Arc::new(create_string_array_with_str_len::<O>(
+                    ARRAY_LEN,
+                    null_density,
+                    str_len,
+                    i as u64,
+                )) as ArrayRef
+            })
+            .collect()
+    }
 
-    let mut rng = seedable_rng();
+    fn bench(
+        c: &mut Criterion,
+        data_name: &str,
+        arrays: &[ArrayRef],
+        index_profiles: &[IndexProfile],
+    ) {
+        let values: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+        for profile in index_profiles {
+            let mut rng = seedable_rng();
+            let indices = profile.generate(&mut rng, values.len(), ARRAY_LEN, OUTPUT_LEN);
+            c.bench_function(
+                &format!(
+                    "interleave {data_name} {OUTPUT_LEN} from {} arrays of {ARRAY_LEN} {}",
+                    values.len(),
+                    profile.name()
+                ),
+                |b| b.iter(|| hint::black_box(interleave(&values, &indices).unwrap())),
+            );
+        }
+    }
 
-    // Pick a random array for every output row
-    let array_indices: Vec<usize> = (0..OUTPUT_LEN)
-        .map(|_| rng.random_range(0..NUM_ARRAYS))
-        .collect();
+    let all_profiles = [
+        IndexProfile::Random,
+        IndexProfile::RandomArrayIncreasingRows,
+        IndexProfile::Runs(32),
+        IndexProfile::SingleArray,
+        IndexProfile::FewDistinct(16),
+    ];
 
-    // For each array, pick sorted random row indices for the rows taken from it
-    let mut rows_per_array: Vec<std::vec::IntoIter<usize>> = (0..NUM_ARRAYS)
-        .map(|array_idx| {
-            let count = array_indices.iter().filter(|&&a| a == array_idx).count();
-            let mut rows: Vec<usize> = (0..count).map(|_| rng.random_range(0..ARRAY_LEN)).collect();
-            rows.sort_unstable();
-            rows.into_iter()
-        })
-        .collect();
-
-    let indices: Vec<(usize, usize)> = array_indices
-        .into_iter()
-        .map(|array_idx| (array_idx, rows_per_array[array_idx].next().unwrap()))
-        .collect();
-
-    c.bench_function(
-        &format!(
-            "interleave str(0..=40, 0.0) {OUTPUT_LEN} from {NUM_ARRAYS} arrays of {ARRAY_LEN} random"
+    let data: &[(&str, f32, StrLen)] = &[
+        // Ids such as UUIDs, all of the same length
+        ("str(uuid, 0.0)", 0.0, StrLen::Fixed(36)),
+        ("str(names, 0.0)", 0.0, NAMES),
+        ("str(names, 0.3)", 0.3, NAMES),
+        // Optional field where missing values are empty strings rather than nulls
+        (
+            "str(names_or_empty, 0.0)",
+            0.0,
+            StrLen::Mixture(&[(0.3, StrLen::Fixed(0)), (0.7, NAMES)]),
         ),
-        |b| b.iter(|| hint::black_box(interleave(&values, &indices).unwrap())),
+        // URLs or file paths: mostly 30-120 characters
+        (
+            "str(urls, 0.0)",
+            0.0,
+            StrLen::LogNormal {
+                median: 60.0,
+                sigma: 0.4,
+            },
+        ),
+        // Free text such as comments or descriptions: mostly short with
+        // occasional long values
+        (
+            "str(long_tail, 0.0)",
+            0.0,
+            StrLen::Mixture(&[
+                (
+                    0.9,
+                    StrLen::LogNormal {
+                        median: 12.0,
+                        sigma: 0.8,
+                    },
+                ),
+                (
+                    0.1,
+                    StrLen::LogNormal {
+                        median: 400.0,
+                        sigma: 0.7,
+                    },
+                ),
+            ]),
+        ),
+    ];
+    for (name, null_density, str_len) in data {
+        let arrays = create_arrays::<i32>(NUM_ARRAYS, *null_density, *str_len);
+        bench(c, name, &arrays, &all_profiles);
+    }
+
+    let arrays = create_arrays::<i64>(NUM_ARRAYS, 0.0, NAMES);
+    bench(
+        c,
+        "large_str(names, 0.0)",
+        &arrays,
+        &[IndexProfile::RandomArrayIncreasingRows],
     );
+
+    // 100 arrays are already covered above
+    for num_arrays in [1, 2, 4, 10, 1000] {
+        let arrays = create_arrays::<i32>(num_arrays, 0.0, NAMES);
+        bench(
+            c,
+            "str(names, 0.0)",
+            &arrays,
+            &[
+                IndexProfile::Random,
+                IndexProfile::RandomArrayIncreasingRows,
+                IndexProfile::Runs(32),
+                IndexProfile::FewDistinct(16),
+            ],
+        );
+    }
 }
 
 criterion_group!(benches, add_benchmark);
