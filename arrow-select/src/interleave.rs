@@ -245,24 +245,42 @@ fn interleave_bytes<T: ByteArrayType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericByteArray<T>>::new(values, indices);
 
+    let (capacity, offsets) = interleave_bytes_offsets(indices, &interleaved.arrays)?;
+
+    let values = interleave_bytes_values(indices, &interleaved.arrays, capacity);
+
+    // Safety: safe by construction
+    let array = unsafe {
+        let offsets = OffsetBuffer::new_unchecked(offsets.into());
+        GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
+    };
+    Ok(Arc::new(array))
+}
+
+#[inline(never)]
+fn interleave_bytes_offsets<T: ByteArrayType>(indices: &[(usize, usize)], arrays: &[&GenericByteArray<T>]) -> Result<(usize, Vec<<T as ByteArrayType>::Offset>), ArrowError> {
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
     offsets.push(T::Offset::from_usize(0).unwrap());
     for (a, b) in indices {
-        let o = interleaved.arrays[*a].value_offsets();
+        let o = arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
         offsets.push(
             T::Offset::from_usize(capacity)
-                .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
+              .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?,
         );
     }
+    Ok((capacity, offsets))
+}
 
+#[inline(never)]
+fn interleave_bytes_values<T: ByteArrayType>(indices: &[(usize, usize)], arrays: &[&GenericByteArray<T>], capacity: usize) -> Vec<u8> {
     let mut values = Vec::<u8>::with_capacity(capacity);
     {
         let mut dest = values.as_mut_ptr();
         for (a, b) in indices {
-            let arr = unsafe { interleaved.arrays.get_unchecked(*a) };
+            let arr = unsafe { arrays.get_unchecked(*a) };
             let end = *unsafe { arr.value_offsets().get_unchecked(*b + 1) };
             let start = *unsafe { arr.value_offsets().get_unchecked(*b) };
             let value_data_slice = unsafe { arr.value_data().as_ptr().offset(start.to_isize().unwrap_unchecked()) };
@@ -284,13 +302,7 @@ fn interleave_bytes<T: ByteArrayType>(
             values.set_len(capacity);
         }
     }
-
-    // Safety: safe by construction
-    let array = unsafe {
-        let offsets = OffsetBuffer::new_unchecked(offsets.into());
-        GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
-    };
-    Ok(Arc::new(array))
+    values
 }
 
 fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
