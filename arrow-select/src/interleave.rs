@@ -245,9 +245,9 @@ fn interleave_bytes<T: ByteArrayType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericByteArray<T>>::new(values, indices);
 
-    let (capacity, offsets) = interleave_bytes_offsets(indices, &interleaved.arrays)?;
+    let (capacity, offsets, values_slices) = interleave_bytes_offsets(indices, &interleaved.arrays)?;
 
-    let values = interleave_bytes_values(indices, &interleaved.arrays, capacity);
+    let values = interleave_bytes_values(values_slices, capacity);
 
     // Safety: safe by construction
     let array = unsafe {
@@ -258,9 +258,10 @@ fn interleave_bytes<T: ByteArrayType>(
 }
 
 #[inline(never)]
-fn interleave_bytes_offsets<T: ByteArrayType>(indices: &[(usize, usize)], arrays: &[&GenericByteArray<T>]) -> Result<(usize, Vec<<T as ByteArrayType>::Offset>), ArrowError> {
+fn interleave_bytes_offsets<'a, T: ByteArrayType>(indices: &[(usize, usize)], arrays: &[&'a GenericByteArray<T>]) -> Result<(usize, Vec<<T as ByteArrayType>::Offset>, Vec<&'a [u8]>), ArrowError> {
     let mut capacity = 0;
     let mut offsets = Vec::with_capacity(indices.len() + 1);
+    let mut values_slices = Vec::with_capacity(indices.len());
     // SAFETY: offsets is allocated with capacity indices.len() + 1, so this is safe
     //         and it implement copy so no mem leak in case of panic
     unsafe {
@@ -268,13 +269,14 @@ fn interleave_bytes_offsets<T: ByteArrayType>(indices: &[(usize, usize)], arrays
     }
     offsets[0] = T::Offset::from_usize(0).unwrap();
     for (index, (a, b)) in indices.iter().enumerate() {
-        let o = arrays[*a].value_offsets();
-        let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
-        capacity += element_len;
+        let item = arrays[*a].value(*b);
+        let slice: &[u8] = item.as_ref();
+        capacity += slice.len();
         offsets[index + 1] = T::Offset::from_usize(capacity)
               .ok_or_else(|| ArrowError::OffsetOverflowError(capacity))?;
+        values_slices.push(slice);
     }
-    Ok((capacity, offsets))
+    Ok((capacity, offsets, values_slices))
 }
 #[inline(always)]
 fn prefetch_read(ptr: *const u8) {
@@ -294,50 +296,46 @@ fn prefetch_read(ptr: *const u8) {
 }
 
 #[inline(never)]
-fn interleave_bytes_values<T: ByteArrayType>(indices: &[(usize, usize)], arrays: &[&GenericByteArray<T>], capacity: usize) -> Vec<u8> {
-    const VALUES_DIST: usize = 8;
-    const OFFSETS_DIST: usize = 2 * VALUES_DIST;
+fn interleave_bytes_values(values_slices: Vec<&[u8]>, capacity: usize) -> Vec<u8> {
+    const PREFETCH_DIST: usize = 8;
 
     let mut values = Vec::<u8>::with_capacity(capacity);
-    {
-        let mut dest = values.as_mut_ptr();
-        for (i, (a, b)) in indices.iter().enumerate() {
-            // Prefetch the offsets needed by the value prefetch below
-            if let Some((pa, pb)) = indices.get(i + OFFSETS_DIST) {
-                let arr = unsafe { arrays.get_unchecked(*pa) };
-                prefetch_read(arr.value_offsets().as_ptr().wrapping_add(*pb) as *const u8);
-            }
+    let mut dest = values.as_mut_ptr();
 
-            // Offsets for this row were prefetched earlier, so reading them is cheap
-            if let Some((pa, pb)) = indices.get(i + VALUES_DIST) {
-                let arr = unsafe { arrays.get_unchecked(*pa) };
-                let offsets = arr.value_offsets();
-                let start = unsafe { offsets.get_unchecked(*pb) }.as_usize();
-                let base = arr.value_data().as_ptr();
-                prefetch_read(base.wrapping_add(start));
-            }
+    let n = values_slices.len();
+    let main_len = n.saturating_sub(PREFETCH_DIST);
 
-            let arr = unsafe { arrays.get_unchecked(*a) };
-            let end = *unsafe { arr.value_offsets().get_unchecked(*b + 1) };
-            let start = *unsafe { arr.value_offsets().get_unchecked(*b) };
-            let value_data_slice = unsafe { arr.value_data().as_ptr().offset(start.to_isize().unwrap_unchecked()) };
-            let len = (end - start).as_usize();
-
-            // SAFETY: dest is valid for writes of bytes.len() and does not overlap with bytes.as_ptr()
-            unsafe {
-                ptr::copy_nonoverlapping(value_data_slice, dest, len);
-            }
-
-            // SAFETY: dest is valid for writes of bytes.len() and does not overlap with bytes.as_ptr()
-            dest = unsafe {
-                dest.add(len)
-            };
+    for i in 0..main_len {
+        // SAFETY: i + PREFETCH_DIST < n in this loop
+        let ahead = unsafe { *values_slices.get_unchecked(i + PREFETCH_DIST) };
+        if !ahead.is_empty() {
+            let p = ahead.as_ptr();
+            prefetch_read(p);
+            // A value can span two cache lines
+            prefetch_read(p.wrapping_add(ahead.len() - 1));
         }
 
-        // SAFETY: all `capacity` elements have been initialized
+        let slice = unsafe { *values_slices.get_unchecked(i) };
+        // SAFETY: dest has room for slice.len() bytes and does not overlap with slice
         unsafe {
-            values.set_len(capacity);
+            ptr::copy_nonoverlapping(slice.as_ptr(), dest, slice.len());
+            dest = dest.add(slice.len());
         }
+    }
+
+    for &slice in &values_slices[main_len..] {
+        // SAFETY: dest has room for slice.len() bytes and does not overlap with slice
+        unsafe {
+            ptr::copy_nonoverlapping(slice.as_ptr(), dest, slice.len());
+            dest = dest.add(slice.len());
+        }
+    }
+
+    debug_assert_eq!(unsafe { dest.offset_from(values.as_ptr()) } as usize, capacity);
+
+    // SAFETY: all `capacity` elements have been initialized
+    unsafe {
+        values.set_len(capacity);
     }
     values
 }
