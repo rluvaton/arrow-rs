@@ -313,13 +313,8 @@ fn interleave_bytes_values<T: ByteArrayType>(indices: &[(usize, usize)], arrays:
                 let arr = unsafe { arrays.get_unchecked(*pa) };
                 let offsets = arr.value_offsets();
                 let start = unsafe { offsets.get_unchecked(*pb) }.as_usize();
-                let end = unsafe { offsets.get_unchecked(*pb + 1) }.as_usize();
                 let base = arr.value_data().as_ptr();
                 prefetch_read(base.wrapping_add(start));
-                // A value can span two cache lines
-                if end > start {
-                    prefetch_read(base.wrapping_add(end - 1));
-                }
             }
 
             let arr = unsafe { arrays.get_unchecked(*a) };
