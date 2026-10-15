@@ -257,9 +257,23 @@ fn interleave_bytes<T: ByteArrayType>(
         );
     }
 
-    let mut values = Vec::with_capacity(capacity);
-    for (a, b) in indices {
-        values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
+    let mut values = Vec::<u8>::with_capacity(capacity);
+    {
+        // SAFETY: we are about to initialize all `capacity` elements of `values`, so it is safe to set the length to `capacity`
+        //  and the type is u8 so premature drop does not leak memory
+        unsafe {
+            values.set_len(capacity);
+        }
+        let mut values_to_set = values.as_mut_slice();
+
+        for (a, b) in indices {
+            let value = interleaved.arrays[*a].value(*b);
+            let bytes : &[u8] = value.as_ref();
+            // SAFETY: values_to_set is valid for writes of bytes.len()
+            let (dest, rest) = unsafe {values_to_set.split_at_mut_unchecked(bytes.len()) };
+            dest.copy_from_slice(bytes);
+            values_to_set = rest;
+        }
     }
 
     // Safety: safe by construction
