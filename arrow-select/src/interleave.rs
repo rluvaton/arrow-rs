@@ -262,16 +262,20 @@ fn interleave_bytes<T: ByteArrayType>(
     {
         let mut dest = values.as_mut_ptr();
         for (a, b) in indices {
-            let value = interleaved.arrays[*a].value(*b);
-            let bytes : &[u8] = value.as_ref();
+            let arr = unsafe { interleaved.arrays.get_unchecked(*a) };
+            let end = *unsafe { arr.value_offsets().get_unchecked(*b + 1) };
+            let start = *unsafe { arr.value_offsets().get_unchecked(*b) };
+            let value_data_slice = unsafe { arr.value_data().as_ptr().offset(start.to_isize().unwrap_unchecked()) };
+            let len = (end - start).as_usize();
+
             // SAFETY: dest is valid for writes of bytes.len() and does not overlap with bytes.as_ptr()
             unsafe {
-                ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
+                ptr::copy_nonoverlapping(value_data_slice, dest, len);
             }
 
             // SAFETY: dest is valid for writes of bytes.len() and does not overlap with bytes.as_ptr()
             dest = unsafe {
-                dest.add(bytes.len())
+                dest.add(len)
             };
         }
 
