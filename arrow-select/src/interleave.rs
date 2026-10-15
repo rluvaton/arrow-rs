@@ -276,13 +276,52 @@ fn interleave_bytes_offsets<T: ByteArrayType>(indices: &[(usize, usize)], arrays
     }
     Ok((capacity, offsets))
 }
+#[inline(always)]
+fn prefetch_read(ptr: *const u8) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!(
+        "prfm pldl1keep, [{p}]",
+        p = in(reg) ptr,
+        options(nostack, readonly, preserves_flags)
+        );
+    }
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use core::arch::x86_64::{_mm_prefetch, _MM_HINT_T0};
+        _mm_prefetch::<_MM_HINT_T0>(ptr as *const i8);
+    }
+}
 
 #[inline(never)]
 fn interleave_bytes_values<T: ByteArrayType>(indices: &[(usize, usize)], arrays: &[&GenericByteArray<T>], capacity: usize) -> Vec<u8> {
+    const VALUES_DIST: usize = 8;
+    const OFFSETS_DIST: usize = 2 * VALUES_DIST;
+
     let mut values = Vec::<u8>::with_capacity(capacity);
     {
         let mut dest = values.as_mut_ptr();
-        for (a, b) in indices {
+        for (i, (a, b)) in indices.iter().enumerate() {
+            // Prefetch the offsets needed by the value prefetch below
+            if let Some((pa, pb)) = indices.get(i + OFFSETS_DIST) {
+                let arr = unsafe { arrays.get_unchecked(*pa) };
+                prefetch_read(arr.value_offsets().as_ptr().wrapping_add(*pb) as *const u8);
+            }
+
+            // Offsets for this row were prefetched earlier, so reading them is cheap
+            if let Some((pa, pb)) = indices.get(i + VALUES_DIST) {
+                let arr = unsafe { arrays.get_unchecked(*pa) };
+                let offsets = arr.value_offsets();
+                let start = unsafe { offsets.get_unchecked(*pb) }.as_usize();
+                let end = unsafe { offsets.get_unchecked(*pb + 1) }.as_usize();
+                let base = arr.value_data().as_ptr();
+                prefetch_read(base.wrapping_add(start));
+                // A value can span two cache lines
+                if end > start {
+                    prefetch_read(base.wrapping_add(end - 1));
+                }
+            }
+
             let arr = unsafe { arrays.get_unchecked(*a) };
             let end = *unsafe { arr.value_offsets().get_unchecked(*b + 1) };
             let start = *unsafe { arr.value_offsets().get_unchecked(*b) };
@@ -307,7 +346,6 @@ fn interleave_bytes_values<T: ByteArrayType>(indices: &[(usize, usize)], arrays:
     }
     values
 }
-
 fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     arrays: &[&dyn Array],
     indices: &[(usize, usize)],
